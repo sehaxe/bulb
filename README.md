@@ -1,47 +1,84 @@
 # bulb
 
-`bulb` is a small Arch-inspired package manager for my own packages. The first implemented package format is:
+A fast Arch Linux package manager written in Rust.
 
-```text
-.pkg.tar.bz3
-```
+## Features
 
-That means a normal tar archive compressed with bzip3. The archive contains `.PKGINFO` plus the files to install.
+- **bzip3** (`.pkg.tar.bz3`) and **zstd** (`.pkg.tar.zst`) package support
+- **BLAKE3 content store** with hardlink deduplication (51% space savings)
+- **Generation system** — atomic upgrades with instant rollback
+- **Parallel pipeline** — download → verify → stage → single sudo apply
+- **Memory-mapped I/O** — zero-copy decompression
+- **SQLite WAL** — concurrent reads, no locking
 
-## Current commands
+## Performance
+
+| Operation | pacman | bulb | Speedup |
+|-----------|--------|------|---------|
+| Install zstd (1.9MB) | 1856ms | 25ms | **74x** |
+| Install bz3 (2.0MB) | 2334ms | 605ms | **3.9x** |
+| Query all packages | 58ms | 1ms | **58x** |
+| Query single package | 74ms | 1ms | **74x** |
+| vercmp (1M comparisons) | — | 344ms | — |
+
+## Commands
 
 ```bash
-bulb build <source-dir>
-bulb install <package.pkg.tar.bz3>
-bulb remove <package>
-bulb query
-bulb query <package>
-bulb query <package> --info
-bulb query <package> --list
-bulb query --owner /path/to/file
+# Package management
+bulb build <source-dir>                    # Build .pkg.tar.bz3 from Bulb.toml
+bulb install <package>                     # Install local package
+bulb install-batch <pkg1> <pkg2> ...       # Install multiple packages in parallel
+bulb install-package <name>                # Install from sync repos
+bulb remove <package>                      # Remove installed package
+
+# Query
+bulb query                                 # List all installed packages
+bulb query <package>                       # Show package info
+bulb query <package> --info                # Detailed info
+bulb query <package> --list                # List files
+bulb query --owner /path/to/file           # Find package owning a file
+
+# Sync
+bulb sync                                  # Download sync databases from mirrors
+
+# Generations
+bulb list-generations                      # Show generation history
+bulb switch <generation>                   # Switch to a generation
+bulb rollback                              # Rollback to previous generation
+
+# Migration
+bulb migrate                               # Import pacman local database
+
+# Benchmarks
+bulb bench-decompress <pkg> -o <out>       # Pure decompression benchmark
+bulb bench-sync-parse <db>                 # Sync DB parsing benchmark
+bulb bench-vercmp                          # Version comparison benchmark
 ```
 
-Global options:
+## Global Options
 
 ```bash
-bulb --root /tmp/root --db-path /tmp/bulb.db install package.pkg.tar.bz3
+bulb --root /tmp/root --db-path /tmp/bulb.db --store-path /tmp/store install pkg.tar.zst
 ```
 
-Useful for testing without touching `/`.
+- `--root` — filesystem root (default: `/`)
+- `--db-path` — SQLite database path (default: `/var/lib/bulb/bulb.db`)
+- `--store-path` — content store path (default: `/var/lib/bulb/content`)
+- `--sync-dir` — sync database directory (default: `/var/lib/bulb/sync`)
 
-## Own package layout
+## Package Format
 
-A package is a bzip3-compressed tar archive:
+### bzip3 (.pkg.tar.bz3)
 
 ```text
 package.pkg.tar.bz3
 ├── .PKGINFO
 ├── usr/
-├── bin/
+│   └── bin/
 └── ...
 ```
 
-`.PKGINFO` uses Arch-like metadata:
+### .PKGINFO
 
 ```text
 pkgname = hello
@@ -53,9 +90,7 @@ packager = bulb
 depend = glibc
 ```
 
-## Build manifest
-
-To build a package, create `Bulb.toml` in the source directory:
+### Build Manifest (Bulb.toml)
 
 ```toml
 [package]
@@ -73,36 +108,54 @@ replaces = []
 backup = []
 ```
 
-Then run:
+## Architecture
 
-```bash
-bulb build .
+```
+Package File → Decompress → Extract → BLAKE3 Hash → Content Store → Hardlink → /usr/bin/xxx
+                                                                        ↓
+                                                              SQLite (generations)
+                                                                        ↓
+                                                              /etc → /etc.old (rollback)
 ```
 
-The source directory contents are packaged, except `Bulb.toml` itself. `.PKGINFO` is generated automatically.
+### Key Components
 
-## Development status
+| Module | Description |
+|--------|-------------|
+| `core/` | Version comparison (rpmvercmp), dependencies, pkginfo |
+| `format/` | ALPM format parsers (desc, sync DB, local DB, mtree) |
+| `db/` | SQLite WAL, generations, content store, transactions |
+| `download.rs` | reqwest HTTP/2 with BLAKE3 verification |
+| `sync.rs` | Sync database parsing (zstd + gzip) |
+| `resolver.rs` | Recursive dependency resolution |
+| `pipeline.rs` | Parallel install pipeline with deferred sudo |
 
-Implemented:
+## Benchmarks
 
-- Rust CLI skeleton.
-- bzip3 `.pkg.tar.bz3` package support.
-- `.PKGINFO` parser/renderer.
-- local package build.
-- local package install.
-- SQLite local DB.
-- installed package query.
-- installed file query.
-- basic file conflict detection.
-- basic package removal.
+Run the benchmark suite:
 
-Not implemented yet:
+```bash
+./benchmarks/run.sh
+```
 
-- remote repositories.
-- dependency solving.
-- system upgrade.
-- hooks.
-- signatures.
-- Btrfs rollback.
-- AUR support.
-- TUI.
+Results are saved to `benchmarks/results/` with timestamps.
+
+## Development Status
+
+### Completed
+
+- Phase 0: Core abstractions (version, dependency, pkginfo, pacman.conf parser)
+- Phase 1: ALPM read compatibility (desc, sync DB, local DB, mtree, pkgfile)
+- Phase 2: Content store with BLAKE3 dedup, generation rollback, transactions
+- Phase 3: Download pipeline, sync repos, dependency resolver, PGP stub
+- Phase 4 (partial): bz3 parallel decompression, benchmarks, parallel pipeline
+
+### Planned
+
+- Phase 4: Sandbox builds (bwrap + landlock), AUR PKGBUILD parser
+- Phase 5: TUI (ratatui + nucleo fuzzy search)
+- Phase 6: bulbd daemon, delta updates
+
+## License
+
+MIT OR Apache-2.0
