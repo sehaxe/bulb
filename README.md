@@ -10,6 +10,9 @@ A fast Arch Linux package manager written in Rust.
 - **Parallel pipeline** — download → verify → stage → single sudo apply
 - **Memory-mapped I/O** — zero-copy decompression
 - **SQLite WAL** — concurrent reads, no locking
+- **Sandbox builds** — bwrap isolation for untrusted packages
+- **AUR PKGBUILD parser** — parse and convert AUR packages
+- **Delta updates** — bsdiff binary patches for incremental upgrades
 
 ## Performance
 
@@ -26,10 +29,14 @@ A fast Arch Linux package manager written in Rust.
 ```bash
 # Package management
 bulb build <source-dir>                    # Build .pkg.tar.bz3 from Bulb.toml
+bulb build-sandbox <source-dir>            # Build inside bwrap sandbox
 bulb install <package>                     # Install local package
 bulb install-batch <pkg1> <pkg2> ...       # Install multiple packages in parallel
 bulb install-package <name>                # Install from sync repos
 bulb remove <package>                      # Remove installed package
+
+# AUR
+bulb parse-pkgbuild <PKGBUILD>            # Parse and display AUR PKGBUILD
 
 # Query
 bulb query                                 # List all installed packages
@@ -123,12 +130,14 @@ Package File → Decompress → Extract → BLAKE3 Hash → Content Store → Ha
 | Module | Description |
 |--------|-------------|
 | `core/` | Version comparison (rpmvercmp), dependencies, pkginfo |
-| `format/` | ALPM format parsers (desc, sync DB, local DB, mtree) |
+| `format/` | ALPM format parsers (desc, sync DB, local DB, mtree), AUR PKGBUILD parser |
 | `db/` | SQLite WAL, generations, content store, transactions |
 | `download.rs` | reqwest HTTP/2 with BLAKE3 verification |
 | `sync.rs` | Sync database parsing (zstd + gzip) |
 | `resolver.rs` | Recursive dependency resolution |
 | `pipeline.rs` | Parallel install pipeline with deferred sudo |
+| `sandbox.rs` | bwrap sandbox for isolated builds |
+| `delta.rs` | bsdiff binary delta patches for incremental updates |
 
 ## Benchmarks
 
@@ -148,13 +157,12 @@ Results are saved to `benchmarks/results/` with timestamps.
 - Phase 1: ALPM read compatibility (desc, sync DB, local DB, mtree, pkgfile)
 - Phase 2: Content store with BLAKE3 dedup, generation rollback, transactions
 - Phase 3: Download pipeline, sync repos, dependency resolver, PGP stub
-- Phase 4 (partial): bz3 parallel decompression, benchmarks, parallel pipeline
+- Phase 4 (partial): bz3 parallel decompression, benchmarks, parallel pipeline, sandbox builds, AUR parser, delta updates
 
 ### Planned
 
-- Phase 4: Sandbox builds (bwrap + landlock), AUR PKGBUILD parser
 - Phase 5: TUI (ratatui + nucleo fuzzy search)
-- Phase 6: bulbd daemon, delta updates
+- Phase 6: bulbd daemon
 
 ## License
 

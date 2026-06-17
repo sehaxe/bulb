@@ -64,6 +64,14 @@ pub enum BulbError {
     #[error("malformed tarball: {0}")]
     MalformedTarball(String),
 
+    // ── Sandbox ──────────────────────────────────────────────────────
+    #[error("sandbox error: {0}")]
+    Sandbox(String),
+
+    // ── Delta ───────────────────────────────────────────────────────
+    #[error("delta error: {0}")]
+    Delta(String),
+
     // ── Signature / crypto ─────────────────────────────────────────
     #[error("signature verification failed: {0}")]
     Signature(String),

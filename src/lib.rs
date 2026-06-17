@@ -1,11 +1,13 @@
 pub mod config;
 pub mod core;
 pub mod db;
+pub mod delta;
 pub mod download;
 pub mod error;
 pub mod format;
 pub mod pipeline;
 pub mod pkginfo;
 pub mod resolver;
+pub mod sandbox;
 pub mod sync;
 pub mod util;

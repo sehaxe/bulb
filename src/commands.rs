@@ -61,6 +61,20 @@ pub enum Commands {
         output: Option<PathBuf>,
     },
 
+    #[command(about = "Build a package inside a sandbox (bwrap)")]
+    BuildSandbox {
+        source_dir: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        allow_network: bool,
+    },
+
+    #[command(about = "Parse and display a PKGBUILD (AUR format)")]
+    ParsePkgbuild {
+        path: PathBuf,
+    },
+
     #[command(about = "Migrate from pacman local database")]
     Migrate {
         #[arg(long, default_value = "/var/lib/pacman/local")]
@@ -183,6 +197,69 @@ pub fn run(cli: Cli) -> Result<()> {
             )?;
 
             println!("built {}", output.display());
+            Ok(())
+        }
+        Commands::BuildSandbox {
+            source_dir,
+            output,
+            allow_network,
+        } => {
+            let output = output.unwrap_or_else(|| {
+                let manifest_path = source_dir.join("Bulb.toml");
+                if let Ok(manifest_text) = fs::read_to_string(&manifest_path) {
+                    if let Ok(manifest) =
+                        toml::from_str::<bulb::format::native::manifest::BuildManifest>(&manifest_text)
+                    {
+                        let info = native_pkg::manifest_to_pkginfo(&manifest);
+                        return source_dir.join(native_pkg::package_file_name(&info));
+                    }
+                }
+                source_dir.join("output.pkg.tar.bz3")
+            });
+
+            let mut config = bulb::sandbox::SandboxConfig::new(source_dir, output);
+            config.allow_network = allow_network;
+
+            let result = bulb::sandbox::SandboxRunner::run(&config)?;
+            println!("built (sandbox) {}", result.display());
+            Ok(())
+        }
+        Commands::ParsePkgbuild { path } => {
+            let content = fs::read_to_string(&path)?;
+            let pkg = bulb::format::aur::parse_pkgbuild(&content)?;
+            println!("pkgname   = {}", pkg.pkgname);
+            println!("pkgver    = {}", pkg.pkgver);
+            println!("pkgrel    = {}", pkg.pkgrel);
+            if let Some(arch) = &pkg.arch {
+                println!("arch      = {arch}");
+            }
+            if let Some(desc) = &pkg.pkgdesc {
+                println!("pkgdesc   = {desc}");
+            }
+            if let Some(url) = &pkg.url {
+                println!("url       = {url}");
+            }
+            if !pkg.depends.is_empty() {
+                println!("depends   = {}", pkg.depends.join(" "));
+            }
+            if !pkg.makedepends.is_empty() {
+                println!("makedepends = {}", pkg.makedepends.join(" "));
+            }
+            if !pkg.provides.is_empty() {
+                println!("provides  = {}", pkg.provides.join(" "));
+            }
+            if !pkg.conflicts.is_empty() {
+                println!("conflicts = {}", pkg.conflicts.join(" "));
+            }
+            if !pkg.replaces.is_empty() {
+                println!("replaces  = {}", pkg.replaces.join(" "));
+            }
+            if let Some(source) = &pkg.source {
+                println!("source    = {}", source.join(" "));
+            }
+            if let Some(sha256sums) = &pkg.sha256sums {
+                println!("sha256sums = {}", sha256sums.join(" "));
+            }
             Ok(())
         }
         Commands::Migrate { pacman_local } => {
