@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{BulbError, Result};
 
-/// A parsed package version: `epoch:pkgver` with an optional `-pkgrel` suffix.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Version {
     pub epoch: u64,
@@ -38,9 +37,7 @@ impl Version {
         };
 
         let (pkgver, pkgrel) = match rest.split_once('-') {
-            Some((pkgver, pkgrel)) if !pkgrel.is_empty() => {
-                (pkgver.to_string(), Some(pkgrel.to_string()))
-            }
+            Some((pv, pr)) if !pr.is_empty() => (pv.to_string(), Some(pr.to_string())),
             _ => (rest.to_string(), None),
         };
 
@@ -48,11 +45,34 @@ impl Version {
             return Err(BulbError::InvalidVersion(format!("empty pkgver in {input:?}")));
         }
 
-        Ok(Version {
-            epoch,
-            pkgver,
-            pkgrel,
-        })
+        Ok(Version { epoch, pkgver, pkgrel })
+    }
+
+    pub fn parse_borrowed(input: &str) -> Result<BorrowedVersion<'_>> {
+        if input.is_empty() {
+            return Err(BulbError::InvalidVersion("empty version string".into()));
+        }
+
+        let (epoch, rest) = match input.split_once(':') {
+            Some((epoch_str, rest)) => {
+                let epoch: u64 = epoch_str
+                    .parse()
+                    .map_err(|_| BulbError::InvalidVersion(format!("bad epoch in {input:?}")))?;
+                (epoch, rest)
+            }
+            None => (0, input),
+        };
+
+        let (pkgver, pkgrel) = match rest.split_once('-') {
+            Some((pv, pr)) if !pr.is_empty() => (pv, Some(pr)),
+            _ => (rest, None),
+        };
+
+        if pkgver.is_empty() {
+            return Err(BulbError::InvalidVersion(format!("empty pkgver in {input:?}")));
+        }
+
+        Ok(BorrowedVersion { epoch, pkgver, pkgrel })
     }
 
     pub fn cmp_alpm(&self, other: &Self) -> Ordering {
@@ -96,6 +116,30 @@ impl std::fmt::Display for Version {
             write!(f, "-{pkgrel}")?;
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BorrowedVersion<'a> {
+    pub epoch: u64,
+    pub pkgver: &'a str,
+    pub pkgrel: Option<&'a str>,
+}
+
+impl<'a> BorrowedVersion<'a> {
+    pub fn cmp_alpm(&self, other: &Self) -> Ordering {
+        match self.epoch.cmp(&other.epoch) {
+            Ordering::Equal => {}
+            non_equal => return non_equal,
+        }
+        match rpmvercmp(self.pkgver, other.pkgver) {
+            Ordering::Equal => {}
+            non_equal => return non_equal,
+        }
+        match (self.pkgrel, other.pkgrel) {
+            (Some(a), Some(b)) => rpmvercmp(a, b),
+            _ => Ordering::Equal,
+        }
     }
 }
 

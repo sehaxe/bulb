@@ -79,6 +79,21 @@ pub enum Commands {
 
     #[command(about = "Update all installed packages")]
     Update,
+
+    #[command(about = "Benchmark: decompress a .pkg.tar.bz3 or .pkg.tar.zst to a file")]
+    BenchDecompress {
+        package: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
+    #[command(about = "Benchmark: parse a sync database file")]
+    BenchSyncParse {
+        db_path: PathBuf,
+    },
+
+    #[command(about = "Benchmark: version comparison throughput")]
+    BenchVercmp,
 }
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -268,6 +283,51 @@ pub fn run(cli: Cli) -> Result<()> {
             println!("update not yet implemented");
             Ok(())
         }
+        Commands::BenchDecompress { package, output } => {
+            let file_name = package.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if file_name.ends_with(".pkg.tar.bz3") {
+                let compressed = fs::read(&package)?;
+                let mut decompressed = Vec::with_capacity(compressed.len() * 3);
+                bzip3::stream::parallel_decompress(&compressed[..], &mut decompressed)
+                    .map_err(|e| BulbError::Decompress(e.to_string()))?;
+                fs::write(&output, &decompressed)?;
+            } else if file_name.ends_with(".pkg.tar.zst") {
+                let compressed = fs::File::open(&package)?;
+                let mut decoder = zstd::stream::Decoder::new(compressed)?;
+                let mut out = fs::File::create(&output)?;
+                std::io::copy(&mut decoder, &mut out)?;
+            } else {
+                return Err(BulbError::UnsupportedPackageFormat(package));
+            }
+            Ok(())
+        }
+        Commands::BenchSyncParse { db_path } => {
+            let _pkgs = bulb::sync::SyncDb::parse_sync_db(&db_path)?;
+            println!("parsed {} packages", _pkgs.len());
+            Ok(())
+        }
+        Commands::BenchVercmp => {
+            use bulb::core::version::BorrowedVersion;
+            let versions = [
+                "1.0", "2.0", "1.0.1", "1.0.2", "2.1.0", "0.9.9", "10.0.0",
+                "1.0a", "1.0b", "1.0rc1", "1.0alpha", "1.0beta", "1.0pre1",
+                "1.0.git20240101", "1.0-1", "2.0-2", "1.0.0.0",
+                "1.2.3.4.5.6", "99.99.99", "0.0.1",
+            ];
+            let parsed: Vec<BorrowedVersion<'_>> = versions.iter()
+                .map(|v| bulb::core::version::Version::parse_borrowed(v).unwrap())
+                .collect();
+            let pairs: Vec<(usize, usize)> = (0..parsed.len())
+                .flat_map(|a| (0..parsed.len()).map(move |b| (a, b)))
+                .collect();
+            for _ in 0..50_000 {
+                for &(a, b) in &pairs {
+                    let _ = parsed[a].cmp_alpm(&parsed[b]);
+                }
+            }
+            println!("{} comparisons", pairs.len() * 50_000);
+            Ok(())
+        }
     }
 }
 
@@ -310,9 +370,13 @@ fn install(package: &Path, root: &Path, db_path: &Path, store_path: &Path) -> Re
         let mut archive = tar::Archive::new(decoder);
         single_pass_extract(&mut archive, root, &store)?
     } else if file_name.ends_with(".pkg.tar.bz3") {
-        let file = fs::File::open(package)?;
-        let decoder = bzip3::read::Bz3Decoder::new(file)?;
-        let mut archive = tar::Archive::new(decoder);
+        // Parallel decompression: bzip3 blocks are independent and can be
+        // decompressed across rayon's thread pool simultaneously.
+        let compressed = fs::read(package)?;
+        let mut decompressed = Vec::with_capacity(compressed.len() * 3);
+        bzip3::stream::parallel_decompress(&compressed[..], &mut decompressed)
+            .map_err(|e| BulbError::Decompress(e.to_string()))?;
+        let mut archive = tar::Archive::new(&decompressed[..]);
         single_pass_extract(&mut archive, root, &store)?
     } else {
         return Err(BulbError::UnsupportedPackageFormat(package.to_path_buf()));

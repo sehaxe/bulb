@@ -137,22 +137,22 @@ pub struct SyncPackage {
 pub fn parse_desc_to_sync(content: &str) -> Option<SyncPackage> {
     let desc = Desc::parse(content);
 
-    let name = desc.get("NAME")?.to_string();
-    let version_str = desc.get("VERSION")?.to_string();
+    let name = desc.get("name")?.to_string();
+    let version_str = desc.get("version")?.to_string();
     let version = Version::parse(&version_str).ok()?;
 
-    let filename = desc.get("FILENAME").map(|s| s.to_string());
-    let csize = desc.get("CSIZE").and_then(|s| s.parse().ok());
-    let isize = desc.get("ISIZE").and_then(|s| s.parse().ok());
-    let sha256 = desc.get("SHA256SUM").map(|s| s.to_string());
-    let arch = desc.get("ARCH").map(|s| s.to_string()).unwrap_or_else(|| "x86_64".into());
-    let base = desc.get("BASE").map(|s| s.to_string());
-    let description = desc.get("DESC").map(|s| s.to_string());
+    let filename = desc.get("filename").map(|s| s.to_string());
+    let csize = desc.get("csize").and_then(|s| s.parse().ok());
+    let isize = desc.get("isize").and_then(|s| s.parse().ok());
+    let sha256 = desc.get("sha256sum").map(|s| s.to_string());
+    let arch = desc.get("arch").map(|s| s.to_string()).unwrap_or_else(|| "x86_64".into());
+    let base = desc.get("base").map(|s| s.to_string());
+    let description = desc.get("desc").map(|s| s.to_string());
 
-    let deps = desc.get_vec("DEPENDS").to_vec();
-    let provides = desc.get_vec("PROVIDES").to_vec();
-    let conflicts = desc.get_vec("CONFLICTS").to_vec();
-    let replaces = desc.get_vec("REPLACES").to_vec();
+    let deps = desc.get_vec("depends").to_vec();
+    let provides = desc.get_vec("provides").to_vec();
+    let conflicts = desc.get_vec("conflicts").to_vec();
+    let replaces = desc.get_vec("replaces").to_vec();
 
     Some(SyncPackage {
         name,

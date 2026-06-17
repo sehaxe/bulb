@@ -21,22 +21,16 @@
 //! notably local has `%INSTALLDATE%`/`%SIZE%`/`%VALIDATION%`, sync has
 //! `%CSIZE%`/`%SHA256SUM%`/`%PGPSIG%`).
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
-/// Case-insensitive ordered map of `%KEY%` → values.
-///
-/// Implemented over `BTreeMap<String, Vec<String>>` with lowercased keys.
-/// Insertion order within a key is preserved; inter-key order is not (sync
-/// `desc` ordering is canonical and we don't rely on it).
 #[derive(Debug, Clone, Default)]
 pub struct Desc {
-    pub fields: BTreeMap<String, Vec<String>>,
+    fields: HashMap<String, Vec<String>>,
 }
 
 impl Desc {
-    /// Parse a `desc` file's text.
     pub fn parse(text: &str) -> Self {
-        let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut fields: HashMap<String, Vec<String>> = HashMap::with_capacity(16);
         let mut lines = text.lines().peekable();
 
         while let Some(line) = lines.next() {
@@ -44,7 +38,6 @@ impl Desc {
             if trimmed.is_empty() {
                 continue;
             }
-            // A key line is `%...%`.
             if let Some(key) = trimmed
                 .strip_prefix('%')
                 .and_then(|s| s.strip_suffix('%'))
@@ -53,7 +46,6 @@ impl Desc {
                 let mut values = Vec::new();
                 while let Some(next) = lines.peek() {
                     if next.trim().is_empty() {
-                        // Blank line terminates this block.
                         lines.next();
                         break;
                     }
@@ -66,16 +58,32 @@ impl Desc {
         Desc { fields }
     }
 
-    /// First value for a key, if present.
+    #[inline]
     pub fn get(&self, key: &str) -> Option<&str> {
+        self.fields
+            .get(key)
+            .and_then(|v| v.first())
+            .map(String::as_str)
+    }
+
+    #[inline]
+    pub fn get_vec(&self, key: &str) -> &[String] {
+        self.fields
+            .get(key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    #[inline]
+    pub fn get_ci(&self, key: &str) -> Option<&str> {
         self.fields
             .get(&key.to_ascii_lowercase())
             .and_then(|v| v.first())
             .map(String::as_str)
     }
 
-    /// All values for a key (may be empty).
-    pub fn get_vec(&self, key: &str) -> &[String] {
+    #[inline]
+    pub fn get_vec_ci(&self, key: &str) -> &[String] {
         self.fields
             .get(&key.to_ascii_lowercase())
             .map(Vec::as_slice)
@@ -118,7 +126,7 @@ libacl.so=1-64
     fn case_insensitive() {
         let d = Desc::parse("%NAME%\nx\n\n");
         assert_eq!(d.get("name"), Some("x"));
-        assert_eq!(d.get("Name"), Some("x"));
+        assert_eq!(d.get_ci("Name"), Some("x"));
     }
 
     #[test]
