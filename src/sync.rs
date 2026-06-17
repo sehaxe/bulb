@@ -64,16 +64,33 @@ impl SyncDb {
     pub fn parse_sync_db(db_path: &Path) -> Result<Vec<SyncPackage>> {
         let bytes = fs::read(db_path)?;
 
-        let gz = flate2::read::GzDecoder::new(&bytes[..]);
-        let mut archive = tar::Archive::new(gz);
+        let is_zstd = bytes.len() >= 4 && bytes[0] == 0x28 && bytes[1] == 0xB5 && bytes[2] == 0x2F && bytes[3] == 0xFD;
 
         let mut packages = Vec::new();
 
+        if is_zstd {
+            let decoder = zstd::stream::Decoder::new(&bytes[..])
+                .map_err(|e| BulbError::Decompress(e.to_string()))?;
+            let mut archive = tar::Archive::new(decoder);
+            Self::extract_desc_entries(&mut archive, &mut packages)?;
+        } else {
+            let gz = flate2::read::GzDecoder::new(&bytes[..]);
+            let mut archive = tar::Archive::new(gz);
+            Self::extract_desc_entries(&mut archive, &mut packages)?;
+        }
+
+        Ok(packages)
+    }
+
+    fn extract_desc_entries(
+        archive: &mut tar::Archive<impl std::io::Read>,
+        packages: &mut Vec<SyncPackage>,
+    ) -> Result<()> {
         for entry in archive.entries().map_err(|e| BulbError::MalformedTarball(e.to_string()))? {
             let entry = entry.map_err(|e| BulbError::MalformedTarball(e.to_string()))?;
             let path = entry.path().map_err(|e| BulbError::MalformedTarball(e.to_string()))?;
 
-            if path.extension().and_then(|e| e.to_str()) == Some("desc") {
+            if path.file_name().and_then(|e| e.to_str()) == Some("desc") {
                 let mut content = String::new();
                 std::io::Read::read_to_string(&mut std::io::BufReader::new(entry), &mut content)
                     .map_err(|e| BulbError::MalformedTarball(e.to_string()))?;
@@ -83,8 +100,7 @@ impl SyncDb {
                 }
             }
         }
-
-        Ok(packages)
+        Ok(())
     }
 
     pub fn load_installed(db: &Database, gen_id: i64) -> Result<HashMap<String, Version>> {

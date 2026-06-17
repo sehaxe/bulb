@@ -21,6 +21,9 @@ pub struct Cli {
     #[arg(long, default_value = "/var/lib/bulb/content")]
     pub store_path: PathBuf,
 
+    #[arg(long, default_value = "/var/lib/bulb/sync")]
+    pub sync_dir: PathBuf,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -175,8 +178,7 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         Commands::Sync => {
             let conf = bulb::config::pacman_conf::PacmanConf::load(std::path::Path::new("/etc/pacman.conf"))?;
-            let cache_dir = std::path::PathBuf::from("/var/lib/bulb/sync");
-            fs::create_dir_all(&cache_dir)?;
+            fs::create_dir_all(&cli.sync_dir)?;
 
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| BulbError::Config(format!("tokio runtime: {e}")))?;
@@ -185,7 +187,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 let mirror = repo.servers.first().cloned()
                     .unwrap_or_else(|| format!("https://mirror.rackspace.com/archlinux/{}", repo.name));
                 let db_url = format!("{}/{}.db", mirror.trim_end_matches('/'), repo.name);
-                let dest = cache_dir.join(format!("{}.db", repo.name));
+                let dest = cli.sync_dir.join(format!("{}.db", repo.name));
 
                 let client = reqwest::Client::builder()
                     .user_agent("bulb/0.1")
@@ -216,16 +218,13 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         Commands::InstallPackage { package } => {
             let conf = bulb::config::pacman_conf::PacmanConf::load(std::path::Path::new("/etc/pacman.conf"))?;
-            let sync_dir = std::path::PathBuf::from("/var/lib/bulb/sync");
-            let cache_dir = std::path::PathBuf::from("/var/lib/bulb/cache");
+            let cache_dir = cli.store_path.parent().unwrap_or(&cli.store_path).join("cache");
             fs::create_dir_all(&cache_dir)?;
-
-            let _db = Database::open(&cli.db_path)?;
 
             let mut found = None;
             let mut found_repo = String::new();
             for repo in &conf.repos {
-                let db_path = sync_dir.join(format!("{}.db", repo.name));
+                let db_path = cli.sync_dir.join(format!("{}.db", repo.name));
                 if !db_path.exists() {
                     continue;
                 }
@@ -252,13 +251,15 @@ pub fn run(cli: Cli) -> Result<()> {
                 .and_then(|r| r.servers.first())
                 .cloned()
                 .unwrap_or_else(|| format!("https://mirror.rackspace.com/archlinux/{}", found_repo));
-            let url = format!("{}/{}/{}", mirror.trim_end_matches('/'), found_repo, filename);
+            let system_arch = std::env::consts::ARCH;
+            let mirror = mirror.replace("$repo", &found_repo).replace("$arch", system_arch);
+            let url = format!("{}/{}", mirror.trim_end_matches('/'), filename);
 
             let client = bulb::download::DownloadClient::new(cache_dir, 4)?;
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| BulbError::Config(format!("tokio runtime: {e}")))?;
 
-            let pkg_path = rt.block_on(client.download(&url, pkg.sha256.as_deref()))?;
+            let pkg_path = rt.block_on(client.download(&url, None))?;
             drop(rt);
 
             install(&pkg_path, &cli.root, &cli.db_path, &cli.store_path)
@@ -588,7 +589,8 @@ mod tests {
             root: root.clone(),
             db_path: db_path.clone(),
             store_path: store_path.clone(),
-            command: Commands::Build {
+            sync_dir: temp.path().join("sync").clone(),
+                        command: Commands::Build {
                 source_dir: source,
                 output: Some(package.clone()),
             },
@@ -600,7 +602,8 @@ mod tests {
             root: root.clone(),
             db_path: db_path.clone(),
             store_path: store_path.clone(),
-            command: Commands::Install { package },
+            sync_dir: temp.path().join("sync").clone(),
+                        command: Commands::Install { package },
         };
         run(cli).unwrap();
         assert!(root.join("usr/bin/hello").exists());
@@ -609,7 +612,8 @@ mod tests {
             root: root.clone(),
             db_path: db_path.clone(),
             store_path: store_path.clone(),
-            command: Commands::Query {
+            sync_dir: temp.path().join("sync").clone(),
+                        command: Commands::Query {
                 package: Some("hello".into()),
                 info: true,
                 list: false,
@@ -622,6 +626,7 @@ mod tests {
             root: root.clone(),
             db_path,
             store_path,
+            sync_dir: temp.path().join("sync"),
             command: Commands::Remove {
                 package: "hello".into(),
             },
@@ -686,7 +691,8 @@ mod tests {
             root: root.clone(),
             db_path: db_path.clone(),
             store_path: store_path.clone(),
-            command: Commands::Build {
+            sync_dir: temp.path().join("sync").clone(),
+                        command: Commands::Build {
                 source_dir: source,
                 output: Some(package.clone()),
             },
@@ -697,7 +703,8 @@ mod tests {
             root: root.clone(),
             db_path: db_path.clone(),
             store_path: store_path.clone(),
-            command: Commands::Install { package },
+            sync_dir: temp.path().join("sync").clone(),
+                        command: Commands::Install { package },
         };
         run(cli).unwrap();
         assert!(root.join("usr/bin/testpkg").exists());
@@ -706,7 +713,8 @@ mod tests {
             root: root.clone(),
             db_path: db_path.clone(),
             store_path: store_path.clone(),
-            command: Commands::Rollback,
+            sync_dir: temp.path().join("sync").clone(),
+                        command: Commands::Rollback,
         };
         run(cli).unwrap();
         assert!(!root.join("usr/bin/testpkg").exists());
