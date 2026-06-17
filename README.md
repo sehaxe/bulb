@@ -166,4 +166,4 @@ Results are saved to `benchmarks/results/` with timestamps.
 
 ## License
 
-MIT OR Apache-2.0
+GPL-2.0-only
