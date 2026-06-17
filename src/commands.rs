@@ -33,6 +33,13 @@ pub enum Commands {
     #[command(about = "Install a local .pkg.tar.zst or .pkg.tar.bz3 package")]
     Install { package: PathBuf },
 
+    #[command(about = "Install multiple packages in parallel (pipeline mode)")]
+    InstallBatch {
+        packages: Vec<PathBuf>,
+        #[arg(long)]
+        noconfirm: bool,
+    },
+
     #[command(about = "Remove an installed package")]
     Remove { package: String },
 
@@ -99,6 +106,33 @@ pub enum Commands {
 pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Install { package } => install(&package, &cli.root, &cli.db_path, &cli.store_path),
+        Commands::InstallBatch { packages, noconfirm: _ } => {
+            use bulb::pipeline::InstallPlan;
+
+            let mut plan = InstallPlan::new(
+                cli.root.clone(),
+                cli.db_path.clone(),
+                cli.store_path.clone(),
+            )?;
+
+            for pkg in &packages {
+                plan.queue(pkg.clone());
+            }
+
+            let result = plan.execute()?;
+
+            for msg in &result.installed {
+                println!("installed {msg}");
+            }
+            for err in &result.errors {
+                eprintln!("error: {err}");
+            }
+
+            if !result.errors.is_empty() {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         Commands::Remove { package } => remove(&package, &cli.root, &cli.db_path),
         Commands::Query {
             package,

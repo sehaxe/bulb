@@ -10,6 +10,7 @@ blake3 = "1.5"
 bzip3 = { version = "0.12", features = ["bundled"] }
 clap = { version = "4.5", features = ["derive", "wrap_help"] }
 flate2 = { version = "1.0", features = ["zlib-rs"] }
+memmap2 = "0.9"
 rayon = "1.10"
 reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "brotli", "zstd", "stream"], default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
