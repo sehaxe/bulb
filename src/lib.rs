@@ -5,6 +5,7 @@ pub mod db;
 pub mod download;
 pub mod error;
 pub mod format;
+pub mod journal;
 pub mod pipeline;
 pub mod pkginfo;
 pub mod resolver;

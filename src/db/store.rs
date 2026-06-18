@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{BulbError, Result};
+use crate::util::fs::{atomic_rename, fsync_dir};
 
 pub struct ContentStore {
     root: PathBuf,
@@ -22,12 +23,24 @@ impl ContentStore {
         let hex = hash.to_hex().to_string();
         let dest = self.object_path(&hex);
 
-        if !dest.exists() {
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&dest, data)?;
+        if dest.exists() {
+            return Ok(hex);
         }
+
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let tmp = dest.with_extension("tmp");
+        fs::write(&tmp, data)?;
+
+        fs::File::open(&tmp)?.sync_all()?;
+
+        if let Some(parent) = dest.parent() {
+            fsync_dir(parent)?;
+        }
+
+        atomic_rename(&tmp, &dest)?;
 
         Ok(hex)
     }
@@ -42,13 +55,30 @@ impl ContentStore {
         if !src.exists() {
             return Err(BulbError::StoreObjectMissing(hash.to_string()));
         }
-        if dest.exists() || dest.symlink_metadata().is_ok() {
-            fs::remove_file(dest)?;
-        }
+
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::hard_link(&src, dest)?;
+
+        let tmp = dest.with_extension("tmp");
+        if tmp.exists() || tmp.symlink_metadata().is_ok() {
+            fs::remove_file(&tmp)?;
+        }
+
+        fs::hard_link(&src, &tmp)?;
+
+        fs::File::open(&tmp)?.sync_all()?;
+
+        if let Some(parent) = dest.parent() {
+            fsync_dir(parent)?;
+        }
+
+        if dest.exists() || dest.symlink_metadata().is_ok() {
+            fs::remove_file(dest)?;
+        }
+
+        atomic_rename(&tmp, dest)?;
+
         Ok(())
     }
 
@@ -57,6 +87,9 @@ impl ContentStore {
             let _ = fs::remove_dir(path);
         } else if path.exists() || path.symlink_metadata().is_ok() {
             fs::remove_file(path)?;
+        }
+        if let Some(parent) = path.parent() {
+            fsync_dir(parent).ok();
         }
         Ok(())
     }

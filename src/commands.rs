@@ -75,15 +75,8 @@ pub enum Commands {
         source_dir: PathBuf,
         #[arg(short, long)]
         output: Option<PathBuf>,
-    },
-
-    #[command(about = "Build a package inside a sandbox (bwrap)")]
-    BuildSandbox {
-        source_dir: PathBuf,
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-        #[arg(long)]
-        allow_network: bool,
+        #[arg(long, help = "Build without sandbox")]
+        no_sandbox: bool,
     },
 
     #[command(about = "Parse and display a PKGBUILD (AUR format)")]
@@ -183,15 +176,27 @@ pub fn run(cli: Cli) -> Result<()> {
             list,
             owner,
         } => query(package, info, list, owner, &cli.root, &cli.db_path),
-        Commands::Build { source_dir, output } => {
+        Commands::Build { source_dir, output, no_sandbox } => {
             let manifest_path = source_dir.join("Bulb.toml");
-            let manifest_text = fs::read_to_string(manifest_path)?;
+            let manifest_text = fs::read_to_string(&manifest_path)?;
             let manifest: bulb::format::native::manifest::BuildManifest = toml::from_str(&manifest_text)?;
             let info = native_pkg::manifest_to_pkginfo(&manifest);
 
             let output = output
                 .map(PathBuf::from)
                 .unwrap_or_else(|| source_dir.join(native_pkg::package_file_name(&info)));
+
+            if !no_sandbox && bulb::sandbox::SandboxRunner::is_available() {
+                let mut config = bulb::sandbox::SandboxConfig::new(source_dir.clone(), output.clone());
+                config.allow_network = false;
+                let result = bulb::sandbox::SandboxRunner::run(&config)?;
+                println!("built (sandbox) {}", result.display());
+                return Ok(());
+            }
+
+            if !no_sandbox {
+                eprintln!("warning: bwrap not found, building without sandbox");
+            }
 
             let dir = tempfile::tempdir()?;
             let tar_path = dir.path().join("package.tar");
@@ -227,31 +232,6 @@ pub fn run(cli: Cli) -> Result<()> {
             encoder.finish()?;
 
             println!("built {}", output.display());
-            Ok(())
-        }
-        Commands::BuildSandbox {
-            source_dir,
-            output,
-            allow_network,
-        } => {
-            let output = output.unwrap_or_else(|| {
-                let manifest_path = source_dir.join("Bulb.toml");
-                if let Ok(manifest_text) = fs::read_to_string(&manifest_path) {
-                    if let Ok(manifest) =
-                        toml::from_str::<bulb::format::native::manifest::BuildManifest>(&manifest_text)
-                    {
-                        let info = native_pkg::manifest_to_pkginfo(&manifest);
-                        return source_dir.join(native_pkg::package_file_name(&info));
-                    }
-                }
-                source_dir.join("output.pkg.tar.zst")
-            });
-
-            let mut config = bulb::sandbox::SandboxConfig::new(source_dir, output);
-            config.allow_network = allow_network;
-
-            let result = bulb::sandbox::SandboxRunner::run(&config)?;
-            println!("built (sandbox) {}", result.display());
             Ok(())
         }
         Commands::ParsePkgbuild { path } => {
@@ -1099,17 +1079,18 @@ mod tests {
 
         let package = temp.path().join("hello.pkg.tar.zst");
         let cli = Cli {
-                    root: root.clone(),
-                    db_path: db_path.clone(),
-                    store_path: store_path.clone(),
-                    sync_dir: temp.path().join("sync").clone(),
-                    offline: false,
-                    command: Some(Commands::Build {
-                        source_dir: source,
-                        output: Some(package.clone()),
-                    }),
-                    query: None,
-                };
+            root: root.clone(),
+            db_path: db_path.clone(),
+            store_path: store_path.clone(),
+            sync_dir: temp.path().join("sync").clone(),
+            offline: false,
+            command: Some(Commands::Build {
+                source_dir: source,
+                output: Some(package.clone()),
+                no_sandbox: true,
+            }),
+            query: None,
+        };
         run(cli).unwrap();
         assert!(package.exists());
 
@@ -1209,17 +1190,18 @@ mod tests {
 
         let package = temp.path().join("testpkg.pkg.tar.zst");
         let cli = Cli {
-                    root: root.clone(),
-                    db_path: db_path.clone(),
-                    store_path: store_path.clone(),
-                    sync_dir: temp.path().join("sync").clone(),
-                    offline: false,
-                    command: Some(Commands::Build {
-                        source_dir: source,
-                        output: Some(package.clone()),
-                    }),
-                    query: None,
-                };
+            root: root.clone(),
+            db_path: db_path.clone(),
+            store_path: store_path.clone(),
+            sync_dir: temp.path().join("sync").clone(),
+            offline: false,
+            command: Some(Commands::Build {
+                source_dir: source,
+                output: Some(package.clone()),
+                no_sandbox: true,
+            }),
+            query: None,
+        };
         run(cli).unwrap();
 
         let cli = Cli {

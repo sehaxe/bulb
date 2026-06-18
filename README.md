@@ -34,7 +34,8 @@ A fast Arch Linux package manager written in Rust.
 # Package management
 bulb init                                  # Init package in current dir
 bulb init <name>                           # Init package in new dir
-bulb build <source-dir>                    # Build .pkg.tar.zst from Bulb.toml
+bulb build <source-dir>                    # Build with sandbox (bwrap)
+bulb build <source-dir> --no-sandbox       # Build without sandbox
 bulb install <package>                     # Install local package
 bulb install-batch <pkg1> <pkg2> ...       # Install multiple packages in parallel
 bulb install-package <name>                # Install from sync repos

@@ -7,6 +7,8 @@ use rayon::prelude::*;
 
 use crate::core::pkginfo::PackageInfo;
 use crate::db::store::ContentStore;
+use crate::journal::{Journal, TransactionKind};
+use crate::util::fs::{atomic_rename, fsync_dir};
 use crate::db::Database;
 use crate::error::{BulbError, Result};
 
@@ -51,11 +53,21 @@ impl InstallPlan {
         let store = Arc::new(ContentStore::new(self.store_path.clone()));
         store.init()?;
 
+        let db_dir = self.db_path.parent().unwrap_or(&self.db_path);
+        let journal = Journal::new(db_dir);
+        journal.init()?;
+
+        let recovered = journal.recover(&self.root)?;
+        for msg in &recovered {
+            eprintln!("recovery: {msg}");
+        }
+
         let mut db = Database::open(&self.db_path)?;
         let gen_id = db.ensure_generation()?;
 
         let mut installed = Vec::new();
         let mut errors = Vec::new();
+        let mut applied_files: Vec<PathBuf> = Vec::new();
 
         let extracted: Vec<Result<(PackageInfo, Vec<PathBuf>)>> = self
             .packages
@@ -71,6 +83,14 @@ impl InstallPlan {
                         continue;
                     }
 
+                    let txn = journal.begin(
+                        TransactionKind::Install {
+                            name: info.name.clone(),
+                            version: info.version.clone(),
+                        },
+                        files.clone(),
+                    )?;
+
                     let new_gen = db.create_generation(&format!("install {}", info.name))?;
                     db.insert_installed_package(
                         new_gen,
@@ -82,7 +102,10 @@ impl InstallPlan {
                     let staging_pkg = self.staging_dir.join(&info.name);
                     if staging_pkg.exists() {
                         apply_staging(&staging_pkg, &self.root)?;
+                        applied_files.extend(files);
                     }
+
+                    journal.commit(&txn)?;
 
                     installed.push(format!("{} {}", info.name, info.version));
                 }
@@ -90,6 +113,21 @@ impl InstallPlan {
                     errors.push(format!("{}: {e}", pkg.path.display()));
                 }
             }
+        }
+
+        if !errors.is_empty() && !applied_files.is_empty() {
+            eprintln!("errors occurred, rolling back {} installed files...", applied_files.len());
+            for file in applied_files.iter().rev() {
+                let dest = self.root.join(file);
+                if dest.exists() || dest.symlink_metadata().is_ok() {
+                    fs::remove_file(&dest).ok();
+                }
+            }
+            fs::remove_dir_all(&self.staging_dir).ok();
+            return Err(BulbError::Config(format!(
+                "installation failed, rolled back {} files",
+                applied_files.len()
+            )));
         }
 
         fs::remove_dir_all(&self.staging_dir).ok();
@@ -216,10 +254,25 @@ fn apply_staging(staging_pkg: &Path, root: &Path) -> Result<()> {
             let _ = fs::create_dir_all(&dest);
         } else if entry.file_type().is_file() {
             ensure_parent_dir(&dest, root, &mut std::collections::HashSet::new())?;
+
+            let tmp = dest.with_extension("tmp");
+            if tmp.exists() || tmp.symlink_metadata().is_ok() {
+                fs::remove_file(&tmp)?;
+            }
+
+            fs::copy(entry.path(), &tmp)?;
+
+            fs::File::open(&tmp)?.sync_all()?;
+
+            if let Some(parent) = dest.parent() {
+                fsync_dir(parent)?;
+            }
+
             if dest.exists() || dest.symlink_metadata().is_ok() {
                 fs::remove_file(&dest)?;
             }
-            fs::copy(entry.path(), &dest)?;
+
+            atomic_rename(&tmp, &dest)?;
         }
     }
     Ok(())
