@@ -114,13 +114,6 @@ fn extract_package(
         let decoder = zstd::stream::Decoder::new(&mmap[..])?;
         let mut archive = tar::Archive::new(decoder);
         single_pass_extract(&mut archive, staging, store)?
-    } else if file_name.ends_with(".pkg.tar.bz3") {
-        let compressed = fs::read(package)?;
-        let mut decompressed = Vec::with_capacity(compressed.len() * 3);
-        bzip3::stream::parallel_decompress(&compressed[..], &mut decompressed)
-            .map_err(|e| BulbError::Decompress(e.to_string()))?;
-        let mut archive = tar::Archive::new(&decompressed[..]);
-        single_pass_extract(&mut archive, staging, store)?
     } else {
         return Err(BulbError::UnsupportedPackageFormat(package.to_path_buf()));
     };
@@ -316,7 +309,7 @@ mod tests {
         )
         .unwrap();
 
-        plan.queue(PathBuf::from("/tmp/test.pkg.tar.bz3"));
+        plan.queue(PathBuf::from("/tmp/test.pkg.tar.zst"));
         assert_eq!(plan.packages.len(), 1);
     }
 }

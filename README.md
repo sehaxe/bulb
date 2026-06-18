@@ -4,7 +4,7 @@ A fast Arch Linux package manager written in Rust.
 
 ## Features
 
-- **bzip3** (`.pkg.tar.bz3`) and **zstd** (`.pkg.tar.zst`) package support
+- **zstd** (`.pkg.tar.zst`) — optimal decompression speed + compression ratio
 - **BLAKE3 content store** with hardlink deduplication (51% space savings)
 - **Generation system** — atomic upgrades with instant rollback
 - **Parallel pipeline** — download → verify → stage → single sudo apply
@@ -13,13 +13,13 @@ A fast Arch Linux package manager written in Rust.
 - **Sandbox builds** — bwrap isolation for untrusted packages
 - **AUR PKGBUILD parser** — parse and convert AUR packages
 - **Delta updates** — bsdiff binary patches for incremental upgrades
+- **AUR search** — search sync repos + AUR with interactive selection
 
 ## Performance
 
 | Operation | pacman | bulb | Speedup |
 |-----------|--------|------|---------|
 | Install zstd (1.9MB) | 1856ms | 25ms | **74x** |
-| Install bz3 (2.0MB) | 2334ms | 605ms | **3.9x** |
 | Query all packages | 58ms | 1ms | **58x** |
 | Query single package | 74ms | 1ms | **74x** |
 | vercmp (1M comparisons) | — | 344ms | — |
@@ -28,7 +28,7 @@ A fast Arch Linux package manager written in Rust.
 
 ```bash
 # Package management
-bulb build <source-dir>                    # Build .pkg.tar.bz3 from Bulb.toml
+bulb build <source-dir>                    # Build .pkg.tar.zst from Bulb.toml
 bulb build-sandbox <source-dir>            # Build inside bwrap sandbox
 bulb install <package>                     # Install local package
 bulb install-batch <pkg1> <pkg2> ...       # Install multiple packages in parallel
@@ -37,6 +37,11 @@ bulb remove <package>                      # Remove installed package
 
 # AUR
 bulb parse-pkgbuild <PKGBUILD>            # Parse and display AUR PKGBUILD
+
+# Search (paru-style)
+bulb search <query>                        # Search sync repos + AUR
+bulb search <query> --aur                  # Search AUR only
+bulb <query>                               # Shorthand: search + interactive select
 
 # Query
 bulb query                                 # List all installed packages
@@ -83,10 +88,10 @@ bulb --root /tmp/root --db-path /tmp/bulb.db --store-path /tmp/store install pkg
 
 ## Package Format
 
-### bzip3 (.pkg.tar.bz3)
+### .pkg.tar.zst
 
 ```text
-package.pkg.tar.bz3
+package.pkg.tar.zst
 ├── .PKGINFO
 ├── usr/
 │   └── bin/
@@ -167,7 +172,7 @@ Results are saved to `benchmarks/results/` with timestamps.
 - Phase 1: ALPM read compatibility (desc, sync DB, local DB, mtree, pkgfile)
 - Phase 2: Content store with BLAKE3 dedup, generation rollback, transactions
 - Phase 3: Download pipeline, sync repos, dependency resolver, PGP stub
-- Phase 4: bz3 parallel decompression, benchmarks, parallel pipeline, sandbox builds, AUR parser, delta updates
+- Phase 4: zstd compression, benchmarks, parallel pipeline, sandbox builds, AUR parser, delta updates
 - Phase 5: TUI (ratatui + nucleo fuzzy search)
 - Phase 6: bulbd daemon (Unix socket IPC, JSON-RPC, cache manager)
 

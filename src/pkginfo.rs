@@ -42,7 +42,7 @@ impl PackageInfo {
 
     pub fn package_file_name(&self) -> String {
         format!(
-            "{}-{}-{}-{}.pkg.tar.bz3",
+            "{}-{}-{}-{}.pkg.tar.zst",
             self.name, self.version, self.release, self.arch
         )
     }

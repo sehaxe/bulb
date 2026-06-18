@@ -368,7 +368,7 @@ fn do_install(name: &str, root: &PathBuf, db_path: &PathBuf, store_path: &PathBu
         .filter(|e| {
             let n = e.file_name();
             let n = n.to_string_lossy();
-            n.starts_with(name) && (n.ends_with(".pkg.tar.zst") || n.ends_with(".pkg.tar.bz3"))
+            n.starts_with(name) && n.ends_with(".pkg.tar.zst")
         })
         .collect();
 
@@ -389,13 +389,6 @@ fn do_install(name: &str, root: &PathBuf, db_path: &PathBuf, store_path: &PathBu
         let buf_reader = std::io::BufReader::with_capacity(1024 * 1024, file);
         let decoder = zstd::stream::Decoder::with_buffer(buf_reader)?;
         let mut archive = tar::Archive::new(decoder);
-        extract_from_archive(&mut archive, root, &store)?
-    } else if file_name.ends_with(".pkg.tar.bz3") {
-        let compressed = std::fs::read(&pkg_path)?;
-        let mut decompressed = Vec::with_capacity(compressed.len() * 3);
-        bzip3::stream::parallel_decompress(&compressed[..], &mut decompressed)
-            .map_err(|e| crate::error::BulbError::Decompress(e.to_string()))?;
-        let mut archive = tar::Archive::new(&decompressed[..]);
         extract_from_archive(&mut archive, root, &store)?
     } else {
         return Err(crate::error::BulbError::UnsupportedPackageFormat(pkg_path));

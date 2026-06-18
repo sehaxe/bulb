@@ -10,7 +10,7 @@ use bulb::error::{BulbError, Result};
 use bulb::format::native::package as native_pkg;
 
 #[derive(Debug, Parser)]
-#[command(name = "bulb", version, about = "A bzip3-based package manager")]
+#[command(name = "bulb", version, about = "A fast Arch Linux package manager")]
 pub struct Cli {
     #[arg(short = 'r', long, default_value = "/")]
     pub root: PathBuf,
@@ -25,12 +25,15 @@ pub struct Cli {
     pub sync_dir: PathBuf,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
+
+    #[arg(help = "Search query (shorthand for 'bulb search <query>')")]
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    #[command(about = "Install a local .pkg.tar.zst or .pkg.tar.bz3 package")]
+    #[command(about = "Install a local .pkg.tar.zst package")]
     Install { package: PathBuf },
 
     #[command(about = "Install multiple packages in parallel (pipeline mode)")]
@@ -54,7 +57,7 @@ pub enum Commands {
         owner: Option<PathBuf>,
     },
 
-    #[command(about = "Build a local .pkg.tar.bz3 package from a directory containing Bulb.toml")]
+    #[command(about = "Build a local .pkg.tar.zst package from a directory containing Bulb.toml")]
     Build {
         source_dir: PathBuf,
         #[arg(short, long)]
@@ -101,7 +104,7 @@ pub enum Commands {
     #[command(about = "Update all installed packages")]
     Update,
 
-    #[command(about = "Benchmark: decompress a .pkg.tar.bz3 or .pkg.tar.zst to a file")]
+    #[command(about = "Benchmark: decompress a .pkg.tar.zst to a file")]
     BenchDecompress {
         package: PathBuf,
         #[arg(short, long)]
@@ -118,10 +121,29 @@ pub enum Commands {
 
     #[command(about = "Interactive TUI with fuzzy search")]
     Tui,
+
+    #[command(about = "Search packages in sync repos and AUR")]
+    Search {
+        query: String,
+        #[arg(long)]
+        aur: bool,
+    },
 }
 
 pub fn run(cli: Cli) -> Result<()> {
-    match cli.command {
+    // If no command but query provided, treat as search
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            if let Some(query) = &cli.query {
+                return search_packages(query, false, &cli.sync_dir);
+            }
+            eprintln!("No command specified. Use --help for usage.");
+            std::process::exit(1);
+        }
+    };
+
+    match command {
         Commands::Install { package } => install(&package, &cli.root, &cli.db_path, &cli.store_path),
         Commands::InstallBatch { packages, noconfirm: _ } => {
             use bulb::pipeline::InstallPlan;
@@ -193,11 +215,12 @@ pub fn run(cli: Cli) -> Result<()> {
                 builder.finish()?;
             }
 
-            bzip3::stream::compress(
-                fs::File::open(&tar_path)?,
+            let mut encoder = zstd::stream::Encoder::new(
                 fs::File::create(&output)?,
-                400 * 1024,
+                19,
             )?;
+            std::io::copy(&mut fs::File::open(&tar_path)?, &mut encoder)?;
+            encoder.finish()?;
 
             println!("built {}", output.display());
             Ok(())
@@ -217,7 +240,7 @@ pub fn run(cli: Cli) -> Result<()> {
                         return source_dir.join(native_pkg::package_file_name(&info));
                     }
                 }
-                source_dir.join("output.pkg.tar.bz3")
+                source_dir.join("output.pkg.tar.zst")
             });
 
             let mut config = bulb::sandbox::SandboxConfig::new(source_dir, output);
@@ -398,21 +421,10 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::BenchDecompress { package, output } => {
-            let file_name = package.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if file_name.ends_with(".pkg.tar.bz3") {
-                let compressed = fs::read(&package)?;
-                let mut decompressed = Vec::with_capacity(compressed.len() * 3);
-                bzip3::stream::parallel_decompress(&compressed[..], &mut decompressed)
-                    .map_err(|e| BulbError::Decompress(e.to_string()))?;
-                fs::write(&output, &decompressed)?;
-            } else if file_name.ends_with(".pkg.tar.zst") {
-                let compressed = fs::File::open(&package)?;
-                let mut decoder = zstd::stream::Decoder::new(compressed)?;
-                let mut out = fs::File::create(&output)?;
-                std::io::copy(&mut decoder, &mut out)?;
-            } else {
-                return Err(BulbError::UnsupportedPackageFormat(package));
-            }
+            let compressed = fs::File::open(&package)?;
+            let mut decoder = zstd::stream::Decoder::new(compressed)?;
+            let mut out = fs::File::create(&output)?;
+            std::io::copy(&mut decoder, &mut out)?;
             Ok(())
         }
         Commands::BenchSyncParse { db_path } => {
@@ -444,6 +456,9 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         Commands::Tui => {
             bulb::tui::run_app(cli.root, cli.db_path, cli.store_path)
+        }
+        Commands::Search { query, aur } => {
+            search_packages(&query, aur, &cli.sync_dir)
         }
     }
 }
@@ -485,15 +500,6 @@ fn install(package: &Path, root: &Path, db_path: &Path, store_path: &Path) -> Re
         let buf_reader = std::io::BufReader::with_capacity(1024 * 1024, file);
         let decoder = zstd::stream::Decoder::with_buffer(buf_reader)?;
         let mut archive = tar::Archive::new(decoder);
-        single_pass_extract(&mut archive, root, &store)?
-    } else if file_name.ends_with(".pkg.tar.bz3") {
-        // Parallel decompression: bzip3 blocks are independent and can be
-        // decompressed across rayon's thread pool simultaneously.
-        let compressed = fs::read(package)?;
-        let mut decompressed = Vec::with_capacity(compressed.len() * 3);
-        bzip3::stream::parallel_decompress(&compressed[..], &mut decompressed)
-            .map_err(|e| BulbError::Decompress(e.to_string()))?;
-        let mut archive = tar::Archive::new(&decompressed[..]);
         single_pass_extract(&mut archive, root, &store)?
     } else {
         return Err(BulbError::UnsupportedPackageFormat(package.to_path_buf()));
@@ -661,6 +667,229 @@ fn remove(package: &str, root: &Path, db_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn search_packages(query: &str, aur_only: bool, sync_dir: &Path) -> Result<()> {
+    let mut results: Vec<(String, String, String, String)> = Vec::new();
+
+    if !aur_only {
+        if let Ok(entries) = fs::read_dir(sync_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("db") {
+                    if let Ok(pkgs) = bulb::sync::SyncDb::parse_sync_db(&path) {
+                        let query_lower = query.to_lowercase();
+                        for pkg in &pkgs {
+                            if pkg.name.to_lowercase().contains(&query_lower)
+                                || pkg.description.as_deref().map_or(false, |d| d.to_lowercase().contains(&query_lower))
+                            {
+                                let repo = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
+                                results.push((
+                                    format!("[{repo}]"),
+                                    pkg.name.clone(),
+                                    pkg.version.to_string(),
+                                    pkg.description.clone().unwrap_or_default(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| BulbError::Config(format!("tokio runtime: {e}")))?;
+
+    match rt.block_on(bulb::aur::search_aur(query)) {
+        Ok(aur_results) => {
+            for pkg in aur_results {
+                results.push((
+                    "[aur]".into(),
+                    pkg.name,
+                    pkg.version,
+                    pkg.description.unwrap_or_default(),
+                ));
+            }
+        }
+        Err(e) => {
+            eprintln!("AUR search failed: {e}");
+        }
+    }
+
+    results.sort_by(|a, b| a.1.cmp(&b.1));
+    results.dedup_by(|a, b| a.1 == b.1);
+
+    if results.is_empty() {
+        println!("No results for '{query}'");
+        return Ok(());
+    }
+
+    for (i, (repo, name, version, desc)) in results.iter().enumerate() {
+        println!(" {} {} {} {}", i + 1, repo, name, version);
+        if !desc.is_empty() {
+            println!("     {desc}");
+        }
+    }
+
+    println!();
+    print!("[1-{}]> ", results.len());
+    use std::io::Write;
+    std::io::stdout().flush().unwrap_or(());
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).unwrap_or(0);
+    let input = input.trim();
+
+    if input.is_empty() {
+        return Ok(());
+    }
+
+    let selection: usize = match input.parse() {
+        Ok(n) if n >= 1 && n <= results.len() => n,
+        _ => {
+            eprintln!("Invalid selection: {input}");
+            return Ok(());
+        }
+    };
+
+    let (_, name, _, _) = &results[selection - 1];
+
+    let conf = bulb::config::pacman_conf::PacmanConf::load(std::path::Path::new("/etc/pacman.conf"))
+        .map_err(|e| BulbError::Config(format!("pacman.conf: {e}")))?;
+
+    let cache_dir = sync_dir.parent().unwrap_or(sync_dir).join("cache");
+    fs::create_dir_all(&cache_dir)?;
+
+    let system_arch = std::env::consts::ARCH;
+
+    for repo in &conf.repos {
+        let db_path = sync_dir.join(format!("{}.db", repo.name));
+        if !db_path.exists() {
+            continue;
+        }
+        if let Ok(pkgs) = bulb::sync::SyncDb::parse_sync_db(&db_path) {
+            for pkg in &pkgs {
+                if pkg.name == *name {
+                    let mirror = repo.servers.first()
+                        .cloned()
+                        .unwrap_or_else(|| format!("https://mirror.rackspace.com/archlinux/{}", repo.name));
+                    let mirror = mirror.replace("$repo", &repo.name).replace("$arch", system_arch);
+                    let filename = pkg.filename.as_deref().unwrap_or("");
+                    let url = format!("{}/{}", mirror.trim_end_matches('/'), filename);
+
+                    let client = bulb::download::DownloadClient::new(cache_dir, 4)?;
+                    let rt = tokio::runtime::Runtime::new()
+                        .map_err(|e| BulbError::Config(format!("tokio runtime: {e}")))?;
+
+                    let pkg_path = rt.block_on(client.download(&url, pkg.sha256.as_deref()))?;
+                    drop(rt);
+
+                    let _pkg_path_str = pkg_path.to_string_lossy().to_string();
+                    println!("Installing from repos: {name}");
+                    return install(&pkg_path, Path::new("/"), &sync_dir.parent().unwrap_or(sync_dir).join("bulb.db"), &sync_dir.parent().unwrap_or(sync_dir).join("content"));
+                }
+            }
+        }
+    }
+
+    println!("Installing from AUR: {name}");
+    let pkg_url = bulb::aur::aur_download_url(name);
+
+    let client = bulb::download::DownloadClient::new(cache_dir.clone(), 4)?;
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| BulbError::Config(format!("tokio runtime: {e}")))?;
+
+    let pkg_path = rt.block_on(client.download(&pkg_url, None))?;
+    drop(rt);
+
+    let extract_dir = tempfile::tempdir()?;
+    let tar_file = fs::File::open(&pkg_path)?;
+    let decoder = flate2::read::GzDecoder::new(tar_file);
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(extract_dir.path())?;
+
+    let source_dir = extract_dir.path().join(name);
+
+    if !source_dir.exists() {
+        let entries: Vec<_> = fs::read_dir(extract_dir.path())?.filter_map(|e| e.ok()).collect();
+        if let Some(first) = entries.first() {
+            if first.path().is_dir() {
+                let source_dir = first.path().to_path_buf();
+                return build_and_install_aur(&source_dir, name);
+            }
+        }
+        return Err(BulbError::InvalidMetadata(format!("AUR package {name} has no PKGBUILD directory")));
+    }
+
+    build_and_install_aur(&source_dir, name)
+}
+
+fn build_and_install_aur(source_dir: &Path, pkg_name: &str) -> Result<()> {
+    let pkgbuild_path = source_dir.join("PKGBUILD");
+    if !pkgbuild_path.exists() {
+        return Err(BulbError::InvalidMetadata(format!("{pkg_name}: no PKGBUILD found")));
+    }
+
+    let pkgbuild_content = fs::read_to_string(&pkgbuild_path)?;
+    let pkg = bulb::format::aur::parse_pkgbuild(&pkgbuild_content)?;
+
+    let temp = tempfile::tempdir()?;
+    let tar_path = temp.path().join("package.tar");
+    {
+        let tar_file = fs::File::create(&tar_path)?;
+        let mut builder = tar::Builder::new(tar_file);
+
+        let version = if pkg.epoch.as_deref() == Some("0") || pkg.epoch.is_none() {
+            format!("{}-{}", pkg.pkgver, pkg.pkgrel)
+        } else if let Some(epoch) = &pkg.epoch {
+            format!("{}:{}-{}", epoch, pkg.pkgver, pkg.pkgrel)
+        } else {
+            format!("{}-{}", pkg.pkgver, pkg.pkgrel)
+        };
+
+        let pkginfo = format!(
+            "pkgname = {}\npkgver = {}\narch = {}\npkgdesc = {}\npackager = bulb\n",
+            pkg.pkgname,
+            version,
+            pkg.arch.as_deref().unwrap_or("x86_64"),
+            pkg.pkgdesc.as_deref().unwrap_or(""),
+        );
+
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_size(pkginfo.as_bytes().len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append_data(&mut header, ".PKGINFO", pkginfo.as_bytes())?;
+
+        for entry in walkdir::WalkDir::new(source_dir).follow_links(false) {
+            let entry = entry?;
+            let path = entry.path();
+            let relative = path.strip_prefix(source_dir)?;
+            if relative.as_os_str().is_empty() || relative == Path::new("PKGBUILD") {
+                continue;
+            }
+            builder.append_path_with_name(path, relative)?;
+        }
+        builder.finish()?;
+    }
+
+    let output = source_dir.join(format!("{pkg_name}.pkg.tar.zst"));
+
+    let mut encoder = zstd::stream::Encoder::new(
+        fs::File::create(&output)?,
+        19,
+    )?;
+    std::io::copy(&mut fs::File::open(&tar_path)?, &mut encoder)?;
+    encoder.finish()?;
+
+    println!("built {}", output.display());
+
+    let db_path = std::path::PathBuf::from("/var/lib/bulb/bulb.db");
+    let store_path = std::path::PathBuf::from("/var/lib/bulb/content");
+
+    install(&output, Path::new("/"), &db_path, &store_path)
+}
+
 fn query(
     package: Option<String>,
     info: bool,
@@ -765,16 +994,17 @@ mod tests {
         .unwrap();
         fs::write(source.join("usr/bin/hello"), "#!/bin/sh\necho hello\n").unwrap();
 
-        let package = temp.path().join("hello.pkg.tar.bz3");
+        let package = temp.path().join("hello.pkg.tar.zst");
         let cli = Cli {
             root: root.clone(),
             db_path: db_path.clone(),
             store_path: store_path.clone(),
             sync_dir: temp.path().join("sync").clone(),
-                        command: Commands::Build {
+            command: Some(Commands::Build {
                 source_dir: source,
                 output: Some(package.clone()),
-            },
+            }),
+            query: None,
         };
         run(cli).unwrap();
         assert!(package.exists());
@@ -784,7 +1014,8 @@ mod tests {
             db_path: db_path.clone(),
             store_path: store_path.clone(),
             sync_dir: temp.path().join("sync").clone(),
-                        command: Commands::Install { package },
+            command: Some(Commands::Install { package }),
+            query: None,
         };
         run(cli).unwrap();
         assert!(root.join("usr/bin/hello").exists());
@@ -794,12 +1025,13 @@ mod tests {
             db_path: db_path.clone(),
             store_path: store_path.clone(),
             sync_dir: temp.path().join("sync").clone(),
-                        command: Commands::Query {
+            command: Some(Commands::Query {
                 package: Some("hello".into()),
                 info: true,
                 list: false,
                 owner: None,
-            },
+            }),
+            query: None,
         };
         run(cli).unwrap();
 
@@ -808,9 +1040,10 @@ mod tests {
             db_path,
             store_path,
             sync_dir: temp.path().join("sync"),
-            command: Commands::Remove {
+            command: Some(Commands::Remove {
                 package: "hello".into(),
-            },
+            }),
+            query: None,
         };
         run(cli).unwrap();
         assert!(!root.join("usr/bin/hello").exists());
@@ -867,16 +1100,17 @@ mod tests {
         .unwrap();
         fs::write(source.join("usr/bin/testpkg"), "#!/bin/sh\necho test\n").unwrap();
 
-        let package = temp.path().join("testpkg.pkg.tar.bz3");
+        let package = temp.path().join("testpkg.pkg.tar.zst");
         let cli = Cli {
             root: root.clone(),
             db_path: db_path.clone(),
             store_path: store_path.clone(),
             sync_dir: temp.path().join("sync").clone(),
-                        command: Commands::Build {
+            command: Some(Commands::Build {
                 source_dir: source,
                 output: Some(package.clone()),
-            },
+            }),
+            query: None,
         };
         run(cli).unwrap();
 
@@ -885,7 +1119,8 @@ mod tests {
             db_path: db_path.clone(),
             store_path: store_path.clone(),
             sync_dir: temp.path().join("sync").clone(),
-                        command: Commands::Install { package },
+            command: Some(Commands::Install { package }),
+            query: None,
         };
         run(cli).unwrap();
         assert!(root.join("usr/bin/testpkg").exists());
@@ -895,7 +1130,8 @@ mod tests {
             db_path: db_path.clone(),
             store_path: store_path.clone(),
             sync_dir: temp.path().join("sync").clone(),
-                        command: Commands::Rollback,
+            command: Some(Commands::Rollback),
+            query: None,
         };
         run(cli).unwrap();
         assert!(!root.join("usr/bin/testpkg").exists());

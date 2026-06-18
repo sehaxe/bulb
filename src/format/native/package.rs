@@ -3,7 +3,6 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use bzip3::read::Bz3Decoder;
 use tar::Archive;
 
 use crate::core::dependency::{Depend, Provide};
@@ -17,13 +16,9 @@ pub struct NativePkgFile {
     pub entries: Vec<PathBuf>,
 }
 
-pub fn bzip3_decoder<R: Read>(reader: R) -> std::result::Result<Bz3Decoder<R>, bzip3::Error> {
-    Ok(Bz3Decoder::new(reader)?)
-}
-
 pub fn read_native_pkg(path: &Path) -> Result<NativePkgFile> {
     let file = File::open(path)?;
-    let decoder = bzip3_decoder(file)?;
+    let decoder = zstd::stream::Decoder::new(file)?;
     let mut archive = Archive::new(decoder);
 
     let mut pkginfo_text = None;
@@ -170,7 +165,7 @@ pub fn manifest_to_pkginfo(manifest: &BuildManifest) -> PackageInfo {
 
 pub fn package_file_name(info: &PackageInfo) -> String {
     let version = &info.version;
-    format!("{}-{}-{}.pkg.tar.bz3", info.name, version, info.arch)
+    format!("{}-{}-{}.pkg.tar.zst", info.name, version, info.arch)
 }
 
 pub fn normalize_archive_path(path: &Path) -> Result<PathBuf> {

@@ -1,7 +1,7 @@
 //! Unified package metadata.
 //!
 //! Every package backend — ALPM `.pkg.tar.zst`, ALPM local DB entries, and
-//! bulb's native `.pkg.tar.bz3` — produces the same [`PackageInfo`] struct.
+//! bulb's native `.pkg.tar.zst` — produces the same [`PackageInfo`] struct.
 //! This is the single source of truth for "what is this package" that the
 //! resolver, DB layer, and UI all consume.
 
@@ -27,7 +27,7 @@ pub enum PackageSource {
         /// base64 detached PGP sig (from `%PGPSIG%`).
         pgpsig: Option<String>,
     },
-    /// bulb's native bz3 format, built locally or from a TOML AUR.
+    /// bulb's native zstd format, built locally or from a TOML AUR.
     Native {
         /// Commit hash if from the TOML AUR; `None` for locally built.
         commit: Option<String>,

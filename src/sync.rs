@@ -171,6 +171,23 @@ pub fn parse_desc_to_sync(content: &str) -> Option<SyncPackage> {
     })
 }
 
+pub fn search_sync_db(db_path: &std::path::Path, query: &str) -> Result<Vec<(String, SyncPackage)>> {
+    let packages = SyncDb::parse_sync_db(db_path)?;
+    let query_lower = query.to_lowercase();
+
+    let mut results: Vec<(String, SyncPackage)> = packages
+        .into_iter()
+        .filter(|pkg| {
+            pkg.name.to_lowercase().contains(&query_lower)
+                || pkg.description.as_deref().map_or(false, |d| d.to_lowercase().contains(&query_lower))
+        })
+        .map(|pkg| (String::new(), pkg))
+        .collect();
+
+    results.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

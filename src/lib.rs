@@ -1,3 +1,4 @@
+pub mod aur;
 pub mod config;
 pub mod core;
 pub mod daemon;

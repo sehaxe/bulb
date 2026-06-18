@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn sandbox_config_defaults() {
-        let config = SandboxConfig::new(PathBuf::from("/src"), PathBuf::from("/out/pkg.tar.bz3"));
+        let config = SandboxConfig::new(PathBuf::from("/src"), PathBuf::from("/out/pkg.tar.zst"));
         assert!(!config.allow_network);
         assert!(config.extra_ro.is_empty());
         assert!(config.extra_rw.is_empty());
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn build_args_unshare_pid() {
-        let config = SandboxConfig::new(PathBuf::from("/src"), PathBuf::from("/out/pkg.tar.bz3"));
+        let config = SandboxConfig::new(PathBuf::from("/src"), PathBuf::from("/out/pkg.tar.zst"));
         assert!(!config.allow_network);
     }
 }

@@ -84,9 +84,6 @@ pub enum BulbError {
     Io(#[from] io::Error),
 
     #[error(transparent)]
-    Bzip3(#[from] bzip3::Error),
-
-    #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
     #[error(transparent)]

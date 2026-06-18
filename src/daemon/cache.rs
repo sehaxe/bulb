@@ -35,7 +35,7 @@ impl CacheManager {
             let metadata = std::fs::metadata(&path)?;
             let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
 
-            if name.ends_with(".pkg.tar.zst") || name.ends_with(".pkg.tar.bz3") {
+            if name.ends_with(".pkg.tar.zst") {
                 let last_access = metadata.accessed().unwrap_or(SystemTime::UNIX_EPOCH);
                 entries.push(CacheEntry {
                     name,
