@@ -1112,7 +1112,32 @@ fn run_search_and_select(
         }
     }
 
-    results.sort_by(|a, b| a.name.cmp(&b.name));
+    results.sort_by(|a, b| {
+        let a_lower = a.name.to_lowercase();
+        let b_lower = b.name.to_lowercase();
+        let a_is_aur = a.repo == "aur";
+        let b_is_aur = b.repo == "aur";
+
+        if a_is_aur != b_is_aur {
+            return if a_is_aur { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less };
+        }
+
+        let query_lower = queries.first().map(|q| q.to_lowercase()).unwrap_or_default();
+
+        let a_exact = a_lower == query_lower;
+        let b_exact = b_lower == query_lower;
+        if a_exact != b_exact {
+            return if a_exact { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+        }
+
+        let a_starts = a_lower.starts_with(&query_lower);
+        let b_starts = b_lower.starts_with(&query_lower);
+        if a_starts != b_starts {
+            return if a_starts { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+        }
+
+        a_lower.cmp(&b_lower)
+    });
     results.dedup_by(|a, b| a.name == b.name);
 
     let root_clone = root.clone();
