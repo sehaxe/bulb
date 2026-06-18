@@ -1,7 +1,7 @@
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
@@ -47,7 +47,12 @@ pub fn run_multi_select(
         if event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
-                    KeyCode::Char('q') => {
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        disable_raw_mode()?;
+                        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                        break Ok(());
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         disable_raw_mode()?;
                         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
                         break Ok(());
@@ -197,10 +202,10 @@ fn ui(f: &mut Frame, app: &mut MultiSelectApp) {
 
     let footer_text = if selected_count > 0 {
         format!(
-            "j/k: navigate  space: select  a: select all  n: deselect all  enter: install {selected_count} packages  q: quit"
+            "j/k: navigate  space: select  a: select all  n: deselect all  enter: install {selected_count} packages  q/esc/ctrl+c: quit"
         )
     } else {
-        "j/k: navigate  space: select  a: select all  n: deselect all  q: quit".to_string()
+        "j/k: navigate  space: select  a: select all  n: deselect all  q/esc/ctrl+c: quit".to_string()
     };
 
     let footer = Paragraph::new(footer_text)
