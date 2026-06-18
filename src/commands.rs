@@ -18,6 +18,24 @@ fn default_data_dir() -> PathBuf {
     }
 }
 
+fn elevate_if_needed(root: &Path) {
+    if root != Path::new("/") || unsafe { libc::getuid() } == 0 {
+        return;
+    }
+    let args: Vec<String> = std::env::args().collect();
+    let err = std::process::Command::new("sudo")
+        .args(&args)
+        .status();
+    match err {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("error: failed to run sudo: {e}");
+            eprintln!("hint: run with sudo or use --root for a different target");
+            std::process::exit(2);
+        }
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "bulb",
@@ -239,6 +257,7 @@ pub fn run(cli: Cli) -> Result<()> {
             init_package(&name, desc.as_deref(), &version)
         }
         Commands::Install { targets, force, needed, download_only } => {
+            elevate_if_needed(&cli.root);
             let local: Vec<&str> = targets.iter()
                 .filter(|t| t.ends_with(".pkg.tar.zst"))
                 .map(|s| s.as_str())
@@ -270,6 +289,7 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Remove { package, recursive, nosave } => {
+            elevate_if_needed(&cli.root);
             if recursive {
                 remove_with_deps(&package, nosave, cli.noconfirm, &cli.root, &db_path, &store_path)
             } else {
@@ -492,7 +512,10 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         #[cfg(feature = "archlinux")]
-        Commands::Update => update_all(cli.offline, &sync_dir, &cli.root, &db_path, &store_path),
+        Commands::Update => {
+            elevate_if_needed(&cli.root);
+            update_all(cli.offline, &sync_dir, &cli.root, &db_path, &store_path)
+        }
         #[cfg(feature = "archlinux")]
         Commands::SyncInfo { packages } => query_sync_info(&packages, &sync_dir),
         #[cfg(feature = "archlinux")]
