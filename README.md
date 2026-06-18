@@ -56,6 +56,14 @@ bulb rollback                              # Rollback to previous generation
 # Migration
 bulb migrate                               # Import pacman local database
 
+# TUI
+bulb tui                                   # Interactive terminal UI with fuzzy search
+
+# Daemon
+bulbd start                                # Start background daemon
+bulbd stop                                 # Stop daemon
+bulbd status                               # Check daemon status
+
 # Benchmarks
 bulb bench-decompress <pkg> -o <out>       # Pure decompression benchmark
 bulb bench-sync-parse <db>                 # Sync DB parsing benchmark
@@ -138,6 +146,8 @@ Package File → Decompress → Extract → BLAKE3 Hash → Content Store → Ha
 | `pipeline.rs` | Parallel install pipeline with deferred sudo |
 | `sandbox.rs` | bwrap sandbox for isolated builds |
 | `delta.rs` | bsdiff binary delta patches for incremental updates |
+| `tui/` | Interactive TUI with ratatui + nucleo fuzzy search |
+| `daemon/` | bulbd daemon — Unix socket IPC, JSON-RPC, cache management |
 
 ## Benchmarks
 
@@ -157,12 +167,14 @@ Results are saved to `benchmarks/results/` with timestamps.
 - Phase 1: ALPM read compatibility (desc, sync DB, local DB, mtree, pkgfile)
 - Phase 2: Content store with BLAKE3 dedup, generation rollback, transactions
 - Phase 3: Download pipeline, sync repos, dependency resolver, PGP stub
-- Phase 4 (partial): bz3 parallel decompression, benchmarks, parallel pipeline, sandbox builds, AUR parser, delta updates
+- Phase 4: bz3 parallel decompression, benchmarks, parallel pipeline, sandbox builds, AUR parser, delta updates
+- Phase 5: TUI (ratatui + nucleo fuzzy search)
+- Phase 6: bulbd daemon (Unix socket IPC, JSON-RPC, cache manager)
 
 ### Planned
 
-- Phase 5: TUI (ratatui + nucleo fuzzy search)
-- Phase 6: bulbd daemon
+- Phase 7: Package signing (GPG integration)
+- Phase 8: Repository management
 
 ## License
 

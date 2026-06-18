@@ -115,6 +115,9 @@ pub enum Commands {
 
     #[command(about = "Benchmark: version comparison throughput")]
     BenchVercmp,
+
+    #[command(about = "Interactive TUI with fuzzy search")]
+    Tui,
 }
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -438,6 +441,9 @@ pub fn run(cli: Cli) -> Result<()> {
             }
             println!("{} comparisons", pairs.len() * 50_000);
             Ok(())
+        }
+        Commands::Tui => {
+            bulb::tui::run_app(cli.root, cli.db_path, cli.store_path)
         }
     }
 }
