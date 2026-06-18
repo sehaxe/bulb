@@ -94,4 +94,16 @@ pub enum BulbError {
 
     #[error(transparent)]
     StripPrefix(#[from] StripPrefixError),
+
+    #[error("{installed}/{total} packages installed; {failed} failed")]
+    PartialInstall { installed: usize, total: usize, failed: usize },
+}
+
+impl BulbError {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            BulbError::PartialInstall { .. } => 1,
+            _ => 2,
+        }
+    }
 }
