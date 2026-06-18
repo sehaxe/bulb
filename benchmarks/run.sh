@@ -64,16 +64,6 @@ echo "" >> "$RESULT_FILE"
 # ══════════════════════════════════════════════════════════════════
 header "1. Decompression Speed"
 
-for pkg in small.pkg.tar.bz3 medium.pkg.tar.bz3 large.pkg.tar.bz3; do
-    [ -f "$DATA_DIR/$pkg" ] || continue
-    pkgname="${pkg%.pkg.tar.bz3}"
-    size_kb=$(( $(stat -c%s "$DATA_DIR/$pkg") / 1024 ))
-    TMPROOT=$(mktemp -d)
-    read -r mn av mx <<< $(time_ms 5 $BULB --root "$TMPROOT" --db-path "$TMPROOT/b.db" --store-path "$TMPROOT/store" install "$DATA_DIR/$pkg")
-    result "bz3 parallel install ($pkgname, ${size_kb}KB)" "$av" "ms" "min=$mn max=$mx"
-    rm -rf "$TMPROOT"
-done
-
 for pkg in large.pkg.tar.zst; do
     [ -f "$DATA_DIR/$pkg" ] || continue
     size_kb=$(( $(stat -c%s "$DATA_DIR/$pkg") / 1024 ))
@@ -89,13 +79,6 @@ echo "" >> "$RESULT_FILE"
 # BENCH 2: Pure decompression (no install overhead)
 # ══════════════════════════════════════════════════════════════════
 header "2. Pure Decompression (no DB/store overhead)"
-
-for pkg in large.pkg.tar.bz3; do
-    TMPF=$(mktemp)
-    read -r mn av mx <<< $(time_ms 10 $BULB bench-decompress "$DATA_DIR/$pkg" -o "$TMPF")
-    result "bz3 parallel decompress" "$av" "ms" "min=$mn max=$mx"
-    rm -f "$TMPF"
-done
 
 for pkg in large.pkg.tar.zst; do
     TMPF=$(mktemp)
@@ -120,14 +103,6 @@ if command -v pacman &>/dev/null; then
         result "pacman -U zstd" "$av" "ms" "min=$mn max=$mx"
         rm -rf "$TMPROOT"
     done
-    for pkg in large.pkg.tar.bz3; do
-        [ -f "$DATA_DIR/$pkg" ] || continue
-        TMPROOT=$(mktemp -d)
-        mkdir -p "$TMPROOT/var/lib/pacman"
-        read -r mn av mx <<< $(time_ms 3 sudo pacman -U "$DATA_DIR/$pkg" --root "$TMPROOT" --dbpath "$TMPROOT/var/lib/pacman" --noconfirm 2>/dev/null)
-        result "pacman -U bz3" "$av" "ms" "min=$mn max=$mx"
-        rm -rf "$TMPROOT"
-    done
 else
     echo "  (skipped: pacman not available or no sudo access)"
     echo "| (skipped) | - | - | - | pacman not available |" >> "$RESULT_FILE"
@@ -137,13 +112,6 @@ for pkg in large.pkg.tar.zst; do
     TMPROOT=$(mktemp -d)
     read -r mn av mx <<< $(time_ms 5 $BULB --root "$TMPROOT" --db-path "$TMPROOT/b.db" --store-path "$TMPROOT/store" install "$DATA_DIR/$pkg")
     result "bulb install zstd" "$av" "ms" "min=$mn max=$mx"
-    rm -rf "$TMPROOT"
-done
-
-for pkg in large.pkg.tar.bz3; do
-    TMPROOT=$(mktemp -d)
-    read -r mn av mx <<< $(time_ms 5 $BULB --root "$TMPROOT" --db-path "$TMPROOT/b.db" --store-path "$TMPROOT/store" install "$DATA_DIR/$pkg")
-    result "bulb install bz3" "$av" "ms" "min=$mn max=$mx"
     rm -rf "$TMPROOT"
 done
 
@@ -205,11 +173,11 @@ echo "" >> "$RESULT_FILE"
 header "6. Content Store (BLAKE3 dedup)"
 
 TMPROOT=$(mktemp -d)
-$BULB --root "$TMPROOT/r1" --db-path "$TMPROOT/b.db" --store-path "$TMPROOT/store" install "$DATA_DIR/large.pkg.tar.bz3" 2>/dev/null
+$BULB --root "$TMPROOT/r1" --db-path "$TMPROOT/b.db" --store-path "$TMPROOT/store" install "$DATA_DIR/large.pkg.tar.zst" 2>/dev/null
 INSTALLED1=$(du -sb "$TMPROOT/r1" | cut -f1)
 STORE1=$(du -sb "$TMPROOT/store" | cut -f1)
 
-$BULB --root "$TMPROOT/r2" --db-path "$TMPROOT/b.db" --store-path "$TMPROOT/store" install "$DATA_DIR/large.pkg.tar.bz3" 2>/dev/null
+$BULB --root "$TMPROOT/r2" --db-path "$TMPROOT/b.db" --store-path "$TMPROOT/store" install "$DATA_DIR/large.pkg.tar.zst" 2>/dev/null
 STORE2=$(du -sb "$TMPROOT/store" | cut -f1)
 INSTALLED2=$(du -sb "$TMPROOT/r2" | cut -f1)
 
