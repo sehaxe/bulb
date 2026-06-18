@@ -36,6 +36,16 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    #[command(about = "Initialize a new package directory")]
+    Init {
+        #[arg(help = "Package name (default: current directory name)")]
+        name: Option<String>,
+        #[arg(short, long, help = "Package description")]
+        desc: Option<String>,
+        #[arg(short = 'v', long, default_value = "1.0", help = "Version")]
+        version: String,
+    },
+
     #[command(about = "Install a local .pkg.tar.zst package")]
     Install { package: PathBuf },
 
@@ -104,33 +114,8 @@ pub enum Commands {
     #[command(about = "Install a package from repositories")]
     InstallPackage { package: String },
 
-    #[command(about = "Update all installed packages")]
-    Update,
-
-    #[command(about = "Benchmark: decompress a .pkg.tar.zst to a file")]
-    BenchDecompress {
-        package: PathBuf,
-        #[arg(short, long)]
-        output: PathBuf,
-    },
-
-    #[command(about = "Benchmark: parse a sync database file")]
-    BenchSyncParse {
-        db_path: PathBuf,
-    },
-
-    #[command(about = "Benchmark: version comparison throughput")]
-    BenchVercmp,
-
     #[command(about = "Interactive TUI with fuzzy search")]
     Tui,
-
-    #[command(about = "Search packages in sync repos and AUR")]
-    Search {
-        query: String,
-        #[arg(long)]
-        aur: bool,
-    },
 
     #[command(about = "Show package cache status")]
     Cache,
@@ -150,6 +135,19 @@ pub fn run(cli: Cli) -> Result<()> {
     };
 
     match command {
+        Commands::Init { name, desc, version } => {
+            let name = match name {
+                Some(n) => n,
+                None => {
+                    std::env::current_dir()
+                        .map_err(|e| BulbError::Config(format!("cannot get current dir: {e}")))?
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .ok_or_else(|| BulbError::Config("cannot determine package name from current directory".into()))?
+                }
+            };
+            init_package(&name, desc.as_deref(), &version)
+        }
         Commands::Install { package } => install(&package, &cli.root, &cli.db_path, &cli.store_path),
         Commands::InstallBatch { packages, noconfirm: _ } => {
             use bulb::pipeline::InstallPlan;
@@ -468,55 +466,59 @@ pub fn run(cli: Cli) -> Result<()> {
 
             install(&downloaded, &cli.root, &cli.db_path, &cli.store_path)
         }
-        Commands::Update => {
-            println!("update not yet implemented");
-            Ok(())
-        }
-        Commands::BenchDecompress { package, output } => {
-            let compressed = fs::File::open(&package)?;
-            let mut decoder = zstd::stream::Decoder::new(compressed)?;
-            let mut out = fs::File::create(&output)?;
-            std::io::copy(&mut decoder, &mut out)?;
-            Ok(())
-        }
-        Commands::BenchSyncParse { db_path } => {
-            let _pkgs = bulb::sync::SyncDb::parse_sync_db(&db_path)?;
-            println!("parsed {} packages", _pkgs.len());
-            Ok(())
-        }
-        Commands::BenchVercmp => {
-            use bulb::core::version::BorrowedVersion;
-            let versions = [
-                "1.0", "2.0", "1.0.1", "1.0.2", "2.1.0", "0.9.9", "10.0.0",
-                "1.0a", "1.0b", "1.0rc1", "1.0alpha", "1.0beta", "1.0pre1",
-                "1.0.git20240101", "1.0-1", "2.0-2", "1.0.0.0",
-                "1.2.3.4.5.6", "99.99.99", "0.0.1",
-            ];
-            let parsed: Vec<BorrowedVersion<'_>> = versions.iter()
-                .map(|v| bulb::core::version::Version::parse_borrowed(v).unwrap())
-                .collect();
-            let pairs: Vec<(usize, usize)> = (0..parsed.len())
-                .flat_map(|a| (0..parsed.len()).map(move |b| (a, b)))
-                .collect();
-            for _ in 0..50_000 {
-                for &(a, b) in &pairs {
-                    let _ = parsed[a].cmp_alpm(&parsed[b]);
-                }
-            }
-            println!("{} comparisons", pairs.len() * 50_000);
-            Ok(())
-        }
         Commands::Tui => {
             bulb::tui::run_app(cli.root, cli.db_path, cli.store_path)
-        }
-        Commands::Search { query, aur } => {
-            search_packages(&query, aur, cli.offline, &cli.sync_dir)
         }
         Commands::Cache => {
             let cache_dir = cli.store_path.parent().unwrap_or(&cli.store_path).join("cache");
             show_cache_status(&cache_dir)
         }
     }
+}
+
+fn init_package(name: &str, desc: Option<&str>, version: &str) -> Result<()> {
+    let dir = std::path::Path::new(name);
+
+    if dir.exists() {
+        return Err(BulbError::Config(format!("directory '{}' already exists", name)));
+    }
+
+    fs::create_dir_all(dir)?;
+    fs::create_dir_all(dir.join("usr/bin"))?;
+
+    let description = desc.unwrap_or("A package");
+
+    let bulb_toml = format!(
+        r#"[package]
+name = "{name}"
+version = "{version}"
+release = "1"
+arch = "x86_64"
+desc = "{description}"
+packager = "bulb user"
+depends = []
+optdepends = []
+provides = []
+conflicts = []
+replaces = []
+backup = []
+"#,
+        name = name,
+        version = version,
+        description = description,
+    );
+
+    fs::write(dir.join("Bulb.toml"), bulb_toml)?;
+
+    println!("initialized package '{}' in ./{name}/", name);
+    println!();
+    println!("next steps:");
+    println!("  1. cd {name}");
+    println!("  2. edit Bulb.toml");
+    println!("  3. add your files to usr/bin/");
+    println!("  4. bulb build .");
+
+    Ok(())
 }
 
 fn into_old_pkginfo(info: &PackageInfo) -> bulb::pkginfo::PackageInfo {

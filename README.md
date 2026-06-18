@@ -32,8 +32,9 @@ A fast Arch Linux package manager written in Rust.
 
 ```bash
 # Package management
+bulb init                                  # Init package in current dir
+bulb init <name>                           # Init package in new dir
 bulb build <source-dir>                    # Build .pkg.tar.zst from Bulb.toml
-bulb build-sandbox <source-dir>            # Build inside bwrap sandbox
 bulb install <package>                     # Install local package
 bulb install-batch <pkg1> <pkg2> ...       # Install multiple packages in parallel
 bulb install-package <name>                # Install from sync repos
@@ -70,16 +71,6 @@ bulb migrate                               # Import pacman local database
 
 # TUI
 bulb tui                                   # Interactive terminal UI with fuzzy search
-
-# Daemon
-bulbd start                                # Start background daemon
-bulbd stop                                 # Stop daemon
-bulbd status                               # Check daemon status
-
-# Benchmarks
-bulb bench-decompress <pkg> -o <out>       # Pure decompression benchmark
-bulb bench-sync-parse <db>                 # Sync DB parsing benchmark
-bulb bench-vercmp                          # Version comparison benchmark
 ```
 
 ## Global Options

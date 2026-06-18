@@ -1,9 +1,7 @@
 pub mod aur;
 pub mod config;
 pub mod core;
-pub mod daemon;
 pub mod db;
-pub mod delta;
 pub mod download;
 pub mod error;
 pub mod format;
