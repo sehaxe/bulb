@@ -17,6 +17,7 @@ A fast Arch Linux package manager written in Rust.
 - **Resume downloads** — HTTP Range support for interrupted transfers
 - **Auto-retry** — exponential backoff (1s → 2s → 4s → 8s → 16s)
 - **Progress display** — real-time download speed and percentage
+- **Offline mode** — install from cache without internet
 
 ## Performance
 
@@ -45,6 +46,9 @@ bulb parse-pkgbuild <PKGBUILD>            # Parse and display AUR PKGBUILD
 bulb search <query>                        # Search sync repos + AUR
 bulb search <query> --aur                  # Search AUR only
 bulb <query>                               # Shorthand: search + interactive select
+
+# Cache
+bulb cache                                 # Show cached packages
 
 # Query
 bulb query                                 # List all installed packages
@@ -81,7 +85,8 @@ bulb bench-vercmp                          # Version comparison benchmark
 ## Global Options
 
 ```bash
-bulb --root /tmp/root --db-path /tmp/bulb.db --store-path /tmp/store install pkg.tar.zst
+bulb --offline install-package firefox     # Install from cache only
+bulb --root /tmp/root install pkg.tar.zst
 ```
 
 - `--root` — filesystem root (default: `/`)

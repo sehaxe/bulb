@@ -24,6 +24,9 @@ pub struct Cli {
     #[arg(long, default_value = "/var/lib/bulb/sync")]
     pub sync_dir: PathBuf,
 
+    #[arg(long, help = "Offline mode: use cached packages only")]
+    pub offline: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 
@@ -128,6 +131,9 @@ pub enum Commands {
         #[arg(long)]
         aur: bool,
     },
+
+    #[command(about = "Show package cache status")]
+    Cache,
 }
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -136,7 +142,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Some(cmd) => cmd,
         None => {
             if let Some(query) = &cli.query {
-                return search_packages(query, false, &cli.sync_dir);
+                return search_packages(query, false, cli.offline, &cli.sync_dir);
             }
             eprintln!("No command specified. Use --help for usage.");
             std::process::exit(1);
@@ -398,6 +404,24 @@ pub fn run(cli: Cli) -> Result<()> {
                 BulbError::InvalidMetadata(format!("package {} has no filename", pkg.name))
             })?;
 
+            let pkg_path = cache_dir.join(&filename);
+
+            if cli.offline {
+                if !pkg_path.exists() {
+                    return Err(BulbError::Config(format!(
+                        "offline mode: {} not in cache. Run `bulb install-package {}` with internet first.",
+                        filename, package
+                    )));
+                }
+                eprintln!("using cached: {}", filename);
+                return install(&pkg_path, &cli.root, &cli.db_path, &cli.store_path);
+            }
+
+            if pkg_path.exists() {
+                eprintln!("using cached: {}", filename);
+                return install(&pkg_path, &cli.root, &cli.db_path, &cli.store_path);
+            }
+
             let mirror = conf.repos.iter()
                 .find(|r| r.name == found_repo)
                 .and_then(|r| r.servers.first())
@@ -411,10 +435,10 @@ pub fn run(cli: Cli) -> Result<()> {
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| BulbError::Config(format!("tokio runtime: {e}")))?;
 
-            let pkg_path = rt.block_on(client.download(&url, None))?;
+            let downloaded = rt.block_on(client.download(&url, pkg.sha256.as_deref()))?;
             drop(rt);
 
-            install(&pkg_path, &cli.root, &cli.db_path, &cli.store_path)
+            install(&downloaded, &cli.root, &cli.db_path, &cli.store_path)
         }
         Commands::Update => {
             println!("update not yet implemented");
@@ -458,7 +482,11 @@ pub fn run(cli: Cli) -> Result<()> {
             bulb::tui::run_app(cli.root, cli.db_path, cli.store_path)
         }
         Commands::Search { query, aur } => {
-            search_packages(&query, aur, &cli.sync_dir)
+            search_packages(&query, aur, cli.offline, &cli.sync_dir)
+        }
+        Commands::Cache => {
+            let cache_dir = cli.store_path.parent().unwrap_or(&cli.store_path).join("cache");
+            show_cache_status(&cache_dir)
         }
     }
 }
@@ -667,7 +695,7 @@ fn remove(package: &str, root: &Path, db_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn search_packages(query: &str, aur_only: bool, sync_dir: &Path) -> Result<()> {
+fn search_packages(query: &str, aur_only: bool, offline: bool, sync_dir: &Path) -> Result<()> {
     let mut results: Vec<(String, String, String, String)> = Vec::new();
 
     if !aur_only {
@@ -696,23 +724,27 @@ fn search_packages(query: &str, aur_only: bool, sync_dir: &Path) -> Result<()> {
         }
     }
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| BulbError::Config(format!("tokio runtime: {e}")))?;
+    if !aur_only && !offline {
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| BulbError::Config(format!("tokio runtime: {e}")))?;
 
-    match rt.block_on(bulb::aur::search_aur(query)) {
-        Ok(aur_results) => {
-            for pkg in aur_results {
-                results.push((
-                    "[aur]".into(),
-                    pkg.name,
-                    pkg.version,
-                    pkg.description.unwrap_or_default(),
-                ));
+        match rt.block_on(bulb::aur::search_aur(query)) {
+            Ok(aur_results) => {
+                for pkg in aur_results {
+                    results.push((
+                        "[aur]".into(),
+                        pkg.name,
+                        pkg.version,
+                        pkg.description.unwrap_or_default(),
+                    ));
+                }
+            }
+            Err(e) => {
+                eprintln!("AUR search failed: {e}");
             }
         }
-        Err(e) => {
-            eprintln!("AUR search failed: {e}");
-        }
+    } else if offline && !aur_only {
+        eprintln!("offline mode: skipping AUR search");
     }
 
     results.sort_by(|a, b| a.1.cmp(&b.1));
@@ -965,6 +997,47 @@ fn query_path_for_root(path: &Path, root: &Path) -> String {
         .into_owned()
 }
 
+fn show_cache_status(cache_dir: &Path) -> Result<()> {
+    if !cache_dir.exists() {
+        println!("Cache directory does not exist: {}", cache_dir.display());
+        return Ok(());
+    }
+
+    let mut total_size: u64 = 0;
+    let mut file_count: u64 = 0;
+    let mut packages: Vec<(String, u64)> = Vec::new();
+
+    for entry in fs::read_dir(cache_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("zst") {
+            let size = entry.metadata()?.len();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+            packages.push((name.to_string(), size));
+            total_size += size;
+            file_count += 1;
+        }
+    }
+
+    packages.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if packages.is_empty() {
+        println!("Cache is empty: {}", cache_dir.display());
+        return Ok(());
+    }
+
+    println!("Cache: {}", cache_dir.display());
+    println!("Packages: {}", file_count);
+    println!("Total size: {:.2} MB", total_size as f64 / 1024.0 / 1024.0);
+    println!();
+
+    for (name, size) in &packages {
+        println!("  {:.2} MB  {}", *size as f64 / 1024.0 / 1024.0, name);
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -996,43 +1069,46 @@ mod tests {
 
         let package = temp.path().join("hello.pkg.tar.zst");
         let cli = Cli {
-            root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
-            command: Some(Commands::Build {
-                source_dir: source,
-                output: Some(package.clone()),
-            }),
-            query: None,
-        };
+                    root: root.clone(),
+                    db_path: db_path.clone(),
+                    store_path: store_path.clone(),
+                    sync_dir: temp.path().join("sync").clone(),
+                    offline: false,
+                    command: Some(Commands::Build {
+                        source_dir: source,
+                        output: Some(package.clone()),
+                    }),
+                    query: None,
+                };
         run(cli).unwrap();
         assert!(package.exists());
 
         let cli = Cli {
-            root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
-            command: Some(Commands::Install { package }),
-            query: None,
-        };
+                    root: root.clone(),
+                    db_path: db_path.clone(),
+                    store_path: store_path.clone(),
+                    sync_dir: temp.path().join("sync").clone(),
+                    offline: false,
+                    command: Some(Commands::Install { package }),
+                    query: None,
+                };
         run(cli).unwrap();
         assert!(root.join("usr/bin/hello").exists());
 
         let cli = Cli {
-            root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
-            command: Some(Commands::Query {
-                package: Some("hello".into()),
-                info: true,
-                list: false,
-                owner: None,
-            }),
-            query: None,
-        };
+                    root: root.clone(),
+                    db_path: db_path.clone(),
+                    store_path: store_path.clone(),
+                    sync_dir: temp.path().join("sync").clone(),
+                    offline: false,
+                    command: Some(Commands::Query {
+                        package: Some("hello".into()),
+                        info: true,
+                        list: false,
+                        owner: None,
+                    }),
+                    query: None,
+                };
         run(cli).unwrap();
 
         let cli = Cli {
@@ -1040,6 +1116,7 @@ mod tests {
             db_path,
             store_path,
             sync_dir: temp.path().join("sync"),
+            offline: false,
             command: Some(Commands::Remove {
                 package: "hello".into(),
             }),
@@ -1102,37 +1179,40 @@ mod tests {
 
         let package = temp.path().join("testpkg.pkg.tar.zst");
         let cli = Cli {
-            root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
-            command: Some(Commands::Build {
-                source_dir: source,
-                output: Some(package.clone()),
-            }),
-            query: None,
-        };
+                    root: root.clone(),
+                    db_path: db_path.clone(),
+                    store_path: store_path.clone(),
+                    sync_dir: temp.path().join("sync").clone(),
+                    offline: false,
+                    command: Some(Commands::Build {
+                        source_dir: source,
+                        output: Some(package.clone()),
+                    }),
+                    query: None,
+                };
         run(cli).unwrap();
 
         let cli = Cli {
-            root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
-            command: Some(Commands::Install { package }),
-            query: None,
-        };
+                    root: root.clone(),
+                    db_path: db_path.clone(),
+                    store_path: store_path.clone(),
+                    sync_dir: temp.path().join("sync").clone(),
+                    offline: false,
+                    command: Some(Commands::Install { package }),
+                    query: None,
+                };
         run(cli).unwrap();
         assert!(root.join("usr/bin/testpkg").exists());
 
         let cli = Cli {
-            root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
-            command: Some(Commands::Rollback),
-            query: None,
-        };
+                    root: root.clone(),
+                    db_path: db_path.clone(),
+                    store_path: store_path.clone(),
+                    sync_dir: temp.path().join("sync").clone(),
+                    offline: false,
+                    command: Some(Commands::Rollback),
+                    query: None,
+                };
         run(cli).unwrap();
         assert!(!root.join("usr/bin/testpkg").exists());
     }
