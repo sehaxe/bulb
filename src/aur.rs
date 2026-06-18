@@ -58,7 +58,7 @@ pub struct AurInfoResult {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct AurResponse<T> {
-    _resultcount: u64,
+    resultcount: u64,
     results: Vec<T>,
     #[serde(rename = "type")]
     result_type: String,
@@ -66,7 +66,7 @@ struct AurResponse<T> {
 
 pub async fn search_aur(query: &str) -> Result<Vec<AurSearchResult>> {
     let url = format!(
-        "https://aur.archlinux.org/rpc.php?v5&type=search&arg={}",
+        "https://aur.archlinux.org/rpc.php?v=5&type=search&arg={}",
         urlencoding::encode(query)
     );
 
@@ -100,7 +100,7 @@ pub async fn search_aur(query: &str) -> Result<Vec<AurSearchResult>> {
 
 pub async fn get_aur_info(pkgname: &str) -> Result<AurInfoResult> {
     let url = format!(
-        "https://aur.archlinux.org/rpc.php?v5&type=info&arg[]={}",
+        "https://aur.archlinux.org/rpc.php?v=5&type=info&arg[]={}",
         urlencoding::encode(pkgname)
     );
 
