@@ -132,6 +132,8 @@ pub struct SyncPackage {
     pub provides: Vec<String>,
     pub conflicts: Vec<String>,
     pub replaces: Vec<String>,
+    pub groups: Vec<String>,
+    pub optdeps: Vec<String>,
 }
 
 pub fn parse_desc_to_sync(content: &str) -> Option<SyncPackage> {
@@ -153,6 +155,8 @@ pub fn parse_desc_to_sync(content: &str) -> Option<SyncPackage> {
     let provides = desc.get_vec("provides").to_vec();
     let conflicts = desc.get_vec("conflicts").to_vec();
     let replaces = desc.get_vec("replaces").to_vec();
+    let groups = desc.get_vec("groups").to_vec();
+    let optdeps = desc.get_vec("optdepends").to_vec();
 
     Some(SyncPackage {
         name,
@@ -168,6 +172,8 @@ pub fn parse_desc_to_sync(content: &str) -> Option<SyncPackage> {
         provides,
         conflicts,
         replaces,
+        groups,
+        optdeps,
     })
 }
 

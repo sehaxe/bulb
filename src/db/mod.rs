@@ -1,4 +1,5 @@
 pub mod installed;
+#[cfg(feature = "archlinux")]
 pub mod migrate_from_alpm;
 pub mod schema;
 pub mod store;

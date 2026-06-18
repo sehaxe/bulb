@@ -1,9 +1,16 @@
+#[cfg(feature = "archlinux")]
 pub mod buildinfo;
 pub mod convert;
+#[cfg(feature = "archlinux")]
 pub mod desc;
+#[cfg(feature = "archlinux")]
 pub mod install_script;
+#[cfg(feature = "archlinux")]
 pub mod local_db;
+#[cfg(feature = "archlinux")]
 pub mod mtree;
+#[cfg(feature = "archlinux")]
 pub mod pkgfile;
 pub mod pkginfo;
+#[cfg(feature = "archlinux")]
 pub mod sync_db;

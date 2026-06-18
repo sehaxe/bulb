@@ -58,7 +58,7 @@ pub struct AurInfoResult {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct AurResponse<T> {
-    resultcount: u64,
+    _resultcount: u64,
     results: Vec<T>,
     #[serde(rename = "type")]
     result_type: String,

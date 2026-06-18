@@ -7,11 +7,11 @@
 use crate::core::dependency::{Depend, Provide};
 use crate::core::pkginfo::{PackageInfo, PackageSource};
 
+#[cfg(feature = "archlinux")]
 use super::desc::Desc;
 use super::pkginfo::PkgInfo;
 
-/// Build a [`PackageInfo`] from a sync/local `desc`. `repo` is the repo name
-/// when known (sync DB), or `None` for local-only entries.
+#[cfg(feature = "archlinux")]
 pub fn package_info_from_desc(desc: &Desc, repo: Option<&str>) -> PackageInfo {
     let depends = to_depends(desc.get_vec("depends"));
     let optdepends = to_depends(desc.get_vec("optdepends"));
@@ -96,7 +96,7 @@ fn to_provides(values: &[String]) -> Vec<Provide> {
     values.iter().map(|v| Provide::parse(v)).collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "archlinux"))]
 mod tests {
     use super::*;
 
