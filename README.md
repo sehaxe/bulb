@@ -14,6 +14,9 @@ A fast Arch Linux package manager written in Rust.
 - **AUR PKGBUILD parser** — parse and convert AUR packages
 - **Delta updates** — bsdiff binary patches for incremental upgrades
 - **AUR search** — search sync repos + AUR with interactive selection
+- **Resume downloads** — HTTP Range support for interrupted transfers
+- **Auto-retry** — exponential backoff (1s → 2s → 4s → 8s → 16s)
+- **Progress display** — real-time download speed and percentage
 
 ## Performance
 

@@ -190,6 +190,7 @@ dependencies = [
  "clap",
  "crossterm",
  "flate2",
+ "futures-util",
  "libc",
  "memmap2",
  "nucleo",
