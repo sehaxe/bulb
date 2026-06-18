@@ -1,3 +1,4 @@
+pub mod multi_select;
 pub mod search;
 pub mod widgets;
 
