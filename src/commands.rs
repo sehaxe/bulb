@@ -413,11 +413,39 @@ pub fn run(cli: Cli) -> Result<()> {
                         filename, package
                     )));
                 }
+
+                let sync_db_path = cli.sync_dir.join(format!("{}.db", found_repo));
+                let db_age = fs::metadata(&sync_db_path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|d| d.as_secs() / 86400);
+
+                if let Some(days) = db_age {
+                    if days > 7 {
+                        eprintln!("warning: sync database is {} days old", days);
+                        eprintln!("         cached version may not be latest. Run `bulb sync` with internet to update.");
+                    }
+                }
+
                 eprintln!("using cached: {}", filename);
                 return install(&pkg_path, &cli.root, &cli.db_path, &cli.store_path);
             }
 
             if pkg_path.exists() {
+                let sync_db_path = cli.sync_dir.join(format!("{}.db", found_repo));
+                let db_age = fs::metadata(&sync_db_path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|d| d.as_secs() / 86400);
+
+                if let Some(days) = db_age {
+                    if days > 7 {
+                        eprintln!("note: cached version may be outdated (sync DB is {} days old)", days);
+                    }
+                }
+
                 eprintln!("using cached: {}", filename);
                 return install(&pkg_path, &cli.root, &cli.db_path, &cli.store_path);
             }
