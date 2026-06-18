@@ -39,6 +39,7 @@ bulb build <source-dir> --no-sandbox       # Build without sandbox
 bulb install <package>                     # Install local package
 bulb install-batch <pkg1> <pkg2> ...       # Install multiple packages in parallel
 bulb install-package <name>                # Install from sync repos
+bulb update                                # Update all installed packages
 bulb remove <package>                      # Remove installed package
 
 # AUR

@@ -107,6 +107,9 @@ pub enum Commands {
     #[command(about = "Install a package from repositories")]
     InstallPackage { package: String },
 
+    #[command(about = "Update all installed packages")]
+    Update,
+
     #[command(about = "Interactive TUI with fuzzy search")]
     Tui,
 
@@ -446,6 +449,7 @@ pub fn run(cli: Cli) -> Result<()> {
 
             install(&downloaded, &cli.root, &cli.db_path, &cli.store_path)
         }
+        Commands::Update => update_all(cli.offline, &cli.sync_dir, &cli.root, &cli.db_path, &cli.store_path),
         Commands::Tui => {
             bulb::tui::run_app(cli.root, cli.db_path, cli.store_path)
         }
@@ -930,6 +934,97 @@ fn build_and_install_aur(source_dir: &Path, pkg_name: &str) -> Result<()> {
     let store_path = std::path::PathBuf::from("/var/lib/bulb/content");
 
     install(&output, Path::new("/"), &db_path, &store_path)
+}
+
+fn update_all(offline: bool, sync_dir: &Path, root: &Path, db_path: &Path, store_path: &Path) -> Result<()> {
+    if offline {
+        return Err(BulbError::Config("cannot update in offline mode".into()));
+    }
+
+    let conf = bulb::config::pacman_conf::PacmanConf::load(std::path::Path::new("/etc/pacman.conf"))?;
+    let cache_dir = store_path.parent().unwrap_or(store_path).join("cache");
+    fs::create_dir_all(&cache_dir)?;
+
+    let db = Database::open(db_path)?;
+    let gen_id = db.current_generation()?.ok_or(BulbError::NoCurrentGeneration)?;
+    let installed = db.list_installed(gen_id)?;
+
+    if installed.is_empty() {
+        println!("no packages installed");
+        return Ok(());
+    }
+
+    let system_arch = std::env::consts::ARCH;
+    let mut updated = 0;
+    let mut skipped = 0;
+    let mut errors = Vec::new();
+
+    for pkg in &installed {
+        let mut found = false;
+        for repo in &conf.repos {
+            let repo_db_path = sync_dir.join(format!("{}.db", repo.name));
+            if !repo_db_path.exists() {
+                continue;
+            }
+            let pkgs = bulb::sync::SyncDb::parse_sync_db(&repo_db_path)?;
+            for remote_pkg in &pkgs {
+                if remote_pkg.name == pkg.name {
+                    let remote_version = remote_pkg.version.to_string();
+                    if remote_version != pkg.version {
+                        println!("{}: {} -> {}", pkg.name, pkg.version, remote_version);
+
+                        let filename = remote_pkg.filename.as_deref().unwrap_or("");
+                        let mirror = repo.servers.first()
+                            .cloned()
+                            .unwrap_or_else(|| format!("https://mirror.rackspace.com/archlinux/{}", repo.name));
+                        let mirror = mirror.replace("$repo", &repo.name).replace("$arch", system_arch);
+                        let url = format!("{}/{}", mirror.trim_end_matches('/'), filename);
+
+                        let client = bulb::download::DownloadClient::new(cache_dir.clone(), 4)?;
+                        let rt = tokio::runtime::Runtime::new()
+                            .map_err(|e| BulbError::Config(format!("tokio runtime: {e}")))?;
+
+                        match rt.block_on(client.download(&url, remote_pkg.sha256.as_deref())) {
+                            Ok(pkg_path) => {
+                                drop(rt);
+                                match install(&pkg_path, root, db_path, store_path) {
+                                    Ok(()) => updated += 1,
+                                    Err(e) => errors.push(format!("{}: {e}", pkg.name)),
+                                }
+                            }
+                            Err(e) => {
+                                drop(rt);
+                                errors.push(format!("{}: download failed: {e}", pkg.name));
+                            }
+                        }
+                    } else {
+                        skipped += 1;
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+        if !found {
+            skipped += 1;
+        }
+    }
+
+    println!();
+    println!("updated: {updated}, skipped: {skipped}, errors: {}", errors.len());
+
+    for err in &errors {
+        eprintln!("  error: {err}");
+    }
+
+    if !errors.is_empty() {
+        std::process::exit(1);
+    }
+
+    Ok(())
 }
 
 fn query(
