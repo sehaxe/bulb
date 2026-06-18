@@ -9,6 +9,15 @@ use bulb::db::Database;
 use bulb::error::{BulbError, Result};
 use bulb::format::native::package as native_pkg;
 
+fn default_data_dir() -> PathBuf {
+    if unsafe { libc::getuid() } == 0 {
+        PathBuf::from("/var/lib/bulb")
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        PathBuf::from(home).join(".bulb")
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "bulb",
@@ -20,15 +29,15 @@ pub struct Cli {
     #[arg(short = 'r', long, default_value = "/", help = "Filesystem root for chroot operations")]
     pub root: PathBuf,
 
-    #[arg(long, default_value = "/var/lib/bulb/bulb.db", help = "SQLite database path")]
-    pub db_path: PathBuf,
+    #[arg(long, help = "SQLite database path")]
+    pub db_path: Option<PathBuf>,
 
-    #[arg(long, default_value = "/var/lib/bulb/content", help = "BLAKE3 content store path")]
-    pub store_path: PathBuf,
+    #[arg(long, help = "BLAKE3 content store path")]
+    pub store_path: Option<PathBuf>,
 
     #[cfg(feature = "archlinux")]
-    #[arg(long, default_value = "/var/lib/bulb/sync", help = "Sync database directory")]
-    pub sync_dir: PathBuf,
+    #[arg(long, help = "Sync database directory")]
+    pub sync_dir: Option<PathBuf>,
 
     #[arg(long, help = "Offline mode: use cached packages only")]
     pub offline: bool,
@@ -192,6 +201,11 @@ pub enum CacheAction {
 }
 
 pub fn run(cli: Cli) -> Result<()> {
+    let data_dir = default_data_dir();
+    let db_path = cli.db_path.unwrap_or_else(|| data_dir.join("bulb.db"));
+    let store_path = cli.store_path.unwrap_or_else(|| data_dir.join("content"));
+    let sync_dir = cli.sync_dir.unwrap_or_else(|| data_dir.join("sync"));
+
     let command = match cli.command {
         Some(cmd) => cmd,
         None => {
@@ -200,9 +214,9 @@ pub fn run(cli: Cli) -> Result<()> {
                 return run_search_and_select(
                     &[query.clone()],
                     &cli.root,
-                    &cli.db_path,
-                    &cli.store_path,
-                    &cli.sync_dir,
+                    &db_path,
+                    &store_path,
+                    &sync_dir,
                 );
             }
             eprintln!("No command specified. Use --help for usage.");
@@ -238,13 +252,13 @@ pub fn run(cli: Cli) -> Result<()> {
 
             if !local.is_empty() {
                 for target in &local {
-                    install(Path::new(target), &cli.root, &cli.db_path, &cli.store_path)?;
+                    install(Path::new(target), &cli.root, &db_path, &store_path)?;
                 }
             }
             if !names.is_empty() {
                 #[cfg(feature = "archlinux")]
                 {
-                    install_names(&names, cli.noconfirm, force, needed, download_only, cli.offline, &cli.root, &cli.db_path, &cli.store_path, &cli.sync_dir)?;
+                    install_names(&names, cli.noconfirm, force, needed, download_only, cli.offline, &cli.root, &db_path, &store_path, &sync_dir)?;
                 }
                 #[cfg(not(feature = "archlinux"))]
                 {
@@ -257,9 +271,9 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         Commands::Remove { package, recursive, nosave } => {
             if recursive {
-                remove_with_deps(&package, nosave, cli.noconfirm, &cli.root, &cli.db_path, &cli.store_path)
+                remove_with_deps(&package, nosave, cli.noconfirm, &cli.root, &db_path, &store_path)
             } else {
-                remove(&package, cli.noconfirm, &cli.root, &cli.db_path)
+                remove(&package, cli.noconfirm, &cli.root, &db_path)
             }
         }
         Commands::Query {
@@ -277,19 +291,19 @@ pub fn run(cli: Cli) -> Result<()> {
         } => {
             #[cfg(feature = "archlinux")]
             if foreign {
-                return query_foreign(&cli.root, &cli.db_path, &cli.sync_dir);
+                return query_foreign(&cli.root, &db_path, &sync_dir);
             }
             if unneeded {
-                return query_orphans(&cli.root, &cli.db_path);
+                return query_orphans(&cli.root, &db_path);
             }
             #[cfg(feature = "archlinux")]
             if upgradable {
-                return query_upgradable(&cli.root, &cli.db_path, &cli.store_path, &cli.sync_dir);
+                return query_upgradable(&cli.root, &db_path, &store_path, &sync_dir);
             }
             if let Some(q) = search {
-                return query_search(&q, &cli.root, &cli.db_path);
+                return query_search(&q, &cli.root, &db_path);
             }
-            query(package, info, list, owner, reasons, &cli.root, &cli.db_path)
+            query(package, info, list, owner, reasons, &cli.root, &db_path)
         }
         Commands::Build { source_dir, output, no_sandbox } => {
             let manifest_path = source_dir.join("Bulb.toml");
@@ -390,13 +404,13 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         #[cfg(feature = "archlinux")]
         Commands::Migrate { pacman_local } => {
-            let mut db = Database::open(&cli.db_path)?;
+            let mut db = Database::open(&db_path)?;
             let gen_id = bulb::db::migrate_from_alpm::migrate_from_alpm(&mut db, &pacman_local)?;
             println!("migrated to generation #{gen_id}");
             Ok(())
         }
         Commands::ListGenerations => {
-            let db = Database::open(&cli.db_path)?;
+            let db = Database::open(&db_path)?;
             let gens = db.list_generations()?;
             for (id, parent, note, is_current) in &gens {
                 let marker = if *is_current { " *" } else { "" };
@@ -408,23 +422,23 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Switch { generation } => {
-            let db = Database::open(&cli.db_path)?;
+            let db = Database::open(&db_path)?;
             let old_gen = db.current_generation()?.ok_or(BulbError::NoCurrentGeneration)?;
             db.switch_generation(generation)?;
-            let store = bulb::db::store::ContentStore::new(cli.store_path.clone());
+            let store = bulb::db::store::ContentStore::new(store_path.clone());
             db.switch_generation_files(old_gen, generation, &cli.root, &store)?;
             println!("switched to generation #{generation}");
             Ok(())
         }
         Commands::Rollback => {
-            let db = Database::open(&cli.db_path)?;
+            let db = Database::open(&db_path)?;
             let current = db.current_generation()?.ok_or(BulbError::NoCurrentGeneration)?;
             if current <= 1 {
                 return Err(BulbError::InvalidMetadata("no previous generation to rollback".into()));
             }
             let old_gen = current;
             db.switch_generation(current - 1)?;
-            let store = bulb::db::store::ContentStore::new(cli.store_path.clone());
+            let store = bulb::db::store::ContentStore::new(store_path.clone());
             db.switch_generation_files(old_gen, current - 1, &cli.root, &store)?;
             println!("rolled back to generation #{}", current - 1);
             Ok(())
@@ -432,7 +446,7 @@ pub fn run(cli: Cli) -> Result<()> {
         #[cfg(feature = "archlinux")]
         Commands::Sync => {
             let conf = bulb::config::pacman_conf::PacmanConf::load(std::path::Path::new("/etc/pacman.conf"))?;
-            fs::create_dir_all(&cli.sync_dir)?;
+            fs::create_dir_all(&sync_dir)?;
 
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| BulbError::Config(format!("tokio runtime: {e}")))?;
@@ -441,7 +455,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 let mirror = repo.servers.first().cloned()
                     .unwrap_or_else(|| format!("https://mirror.rackspace.com/archlinux/{}", repo.name));
                 let db_url = format!("{}/{}.db", mirror.trim_end_matches('/'), repo.name);
-                let dest = cli.sync_dir.join(format!("{}.db", repo.name));
+                let dest = sync_dir.join(format!("{}.db", repo.name));
 
                 let client = reqwest::Client::builder()
                     .user_agent("bulb/0.1")
@@ -478,13 +492,13 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         #[cfg(feature = "archlinux")]
-        Commands::Update => update_all(cli.offline, &cli.sync_dir, &cli.root, &cli.db_path, &cli.store_path),
+        Commands::Update => update_all(cli.offline, &sync_dir, &cli.root, &db_path, &store_path),
         #[cfg(feature = "archlinux")]
-        Commands::SyncInfo { packages } => query_sync_info(&packages, &cli.sync_dir),
+        Commands::SyncInfo { packages } => query_sync_info(&packages, &sync_dir),
         #[cfg(feature = "archlinux")]
-        Commands::RepoList { repo } => query_repo_list(repo.as_deref(), &cli.sync_dir),
+        Commands::RepoList { repo } => query_repo_list(repo.as_deref(), &sync_dir),
         Commands::Cache { action } => {
-            let cache_dir = cli.store_path.parent().unwrap_or(&cli.store_path).join("cache");
+            let cache_dir = store_path.parent().unwrap_or(&store_path).join("cache");
             match action {
                 None | Some(CacheAction::List) => show_cache_status(&cache_dir),
                 Some(CacheAction::Clean { keep }) => clean_cache(&cache_dir, keep),
@@ -493,14 +507,14 @@ pub fn run(cli: Cli) -> Result<()> {
             }
         }
         Commands::Daemon => {
-            let daemon_dir = cli.store_path.parent().unwrap_or(&cli.store_path);
+            let daemon_dir = store_path.parent().unwrap_or(&store_path);
             fs::create_dir_all(daemon_dir)?;
             let config = bulb::daemon::DaemonConfig {
                 socket_path: daemon_dir.join("bulbd.sock"),
                 pid_path: daemon_dir.join("bulbd.pid"),
-                db_path: cli.db_path.clone(),
-                store_path: cli.store_path.clone(),
-                cache_path: cli.store_path.parent().unwrap_or(&cli.store_path).join("cache"),
+                db_path: db_path.clone(),
+                store_path: store_path.clone(),
+                cache_path: store_path.parent().unwrap_or(&store_path).join("cache"),
                 max_cache_size: 2 * 1024 * 1024 * 1024,
             };
             let rt = tokio::runtime::Runtime::new()
@@ -2074,9 +2088,9 @@ mod tests {
         let package = temp.path().join("hello.pkg.tar.zst");
         let cli = Cli {
             root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
+            db_path: Some(db_path.clone()),
+            store_path: Some(store_path.clone()),
+            sync_dir: Some(temp.path().join("sync")),
             offline: false,
             noconfirm: false,
             command: Some(Commands::Build {
@@ -2091,9 +2105,9 @@ mod tests {
 
         let cli = Cli {
             root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
+            db_path: Some(db_path.clone()),
+            store_path: Some(store_path.clone()),
+            sync_dir: Some(temp.path().join("sync")),
             offline: false,
             noconfirm: false,
             command: Some(Commands::Install {
@@ -2109,9 +2123,9 @@ mod tests {
 
         let cli = Cli {
             root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
+            db_path: Some(db_path.clone()),
+            store_path: Some(store_path.clone()),
+            sync_dir: Some(temp.path().join("sync")),
             offline: false,
             noconfirm: false,
             command: Some(Commands::Query {
@@ -2131,9 +2145,9 @@ mod tests {
 
         let cli = Cli {
             root: root.clone(),
-            db_path,
-            store_path,
-            sync_dir: temp.path().join("sync"),
+            db_path: Some(db_path),
+            store_path: Some(store_path),
+            sync_dir: Some(temp.path().join("sync")),
             offline: false,
             noconfirm: false,
             command: Some(Commands::Remove {
@@ -2202,9 +2216,9 @@ mod tests {
         let package = temp.path().join("testpkg.pkg.tar.zst");
         let cli = Cli {
             root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
+            db_path: Some(db_path.clone()),
+            store_path: Some(store_path.clone()),
+            sync_dir: Some(temp.path().join("sync")),
             offline: false,
             noconfirm: false,
             command: Some(Commands::Build {
@@ -2218,9 +2232,9 @@ mod tests {
 
         let cli = Cli {
             root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
+            db_path: Some(db_path.clone()),
+            store_path: Some(store_path.clone()),
+            sync_dir: Some(temp.path().join("sync")),
             offline: false,
             noconfirm: false,
             command: Some(Commands::Install {
@@ -2236,9 +2250,9 @@ mod tests {
 
         let cli = Cli {
             root: root.clone(),
-            db_path: db_path.clone(),
-            store_path: store_path.clone(),
-            sync_dir: temp.path().join("sync").clone(),
+            db_path: Some(db_path),
+            store_path: Some(store_path),
+            sync_dir: Some(temp.path().join("sync")),
             offline: false,
             noconfirm: false,
             command: Some(Commands::Rollback),
